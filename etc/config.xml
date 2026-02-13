@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Store:etc/config.xsd">
+    <default>
+        <system>
+            <full_page_cache>
+                <trident>
+                    <api_url>http://trident:9301</api_url>
+                    <api_token></api_token>
+                    <soft_purge>1</soft_purge>
+                    <debug>0</debug>
+                </trident>
+            </full_page_cache>
+        </system>
+    </default>
+</config>

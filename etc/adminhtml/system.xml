@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system_file.xsd">
+    <system>
+        <section id="system">
+            <group id="full_page_cache">
+                <group id="trident" translate="label" sortOrder="610" showInDefault="1">
+                    <label>Trident Configuration</label>
+                    <field id="api_url" type="text" translate="label comment" sortOrder="10" showInDefault="1">
+                        <label>API URL</label>
+                        <comment>Trident Admin API URL (e.g., http://trident:9301)</comment>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
+                    <field id="api_token" type="obscure" translate="label comment" sortOrder="20" showInDefault="1">
+                        <label>API Token</label>
+                        <comment>Bearer token for Trident Admin API authentication</comment>
+                        <backend_model>Magento\Config\Model\Config\Backend\Encrypted</backend_model>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
+                    <field id="soft_purge" type="select" translate="label comment" sortOrder="30" showInDefault="1">
+                        <label>Soft Purge</label>
+                        <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                        <comment>Enable soft purge for stale-while-revalidate behavior. Recommended for high-traffic sites.</comment>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
+                    <field id="debug" type="select" translate="label comment" sortOrder="40" showInDefault="1">
+                        <label>Debug Mode</label>
+                        <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                        <comment>Enable debug logging for Trident cache operations</comment>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
+                    <depends>
+                        <field id="caching_application">3</field>
+                    </depends>
+                </group>
+            </group>
+        </section>
+    </system>
+</config>

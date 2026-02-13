@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+
+    <!-- Plugin to add Trident option to cache application dropdown -->
+    <type name="Magento\PageCache\Model\System\Config\Source\Application">
+        <plugin name="trident_cache_application" type="Qoliber\TridentCache\Plugin\ApplicationPlugin" sortOrder="10"/>
+    </type>
+
+    <!-- Response Plugin for cache headers -->
+    <type name="Magento\Framework\App\Response\Http">
+        <plugin name="trident_cache_response" type="Qoliber\TridentCache\Plugin\ResponsePlugin" sortOrder="1000"/>
+    </type>
+
+    <!-- Plugin to purge Trident when FPC is flushed -->
+    <type name="Magento\PageCache\Model\Cache\Type">
+        <plugin name="trident_cache_type" type="Qoliber\TridentCache\Plugin\CacheTypePlugin" sortOrder="100"/>
+    </type>
+
+    <!-- Mark Trident config as sensitive/environment -->
+    <type name="Magento\Config\Model\Config\TypePool">
+        <arguments>
+            <argument name="sensitive" xsi:type="array">
+                <item name="system/full_page_cache/trident/api_token" xsi:type="string">1</item>
+            </argument>
+            <argument name="environment" xsi:type="array">
+                <item name="system/full_page_cache/trident/api_url" xsi:type="string">1</item>
+                <item name="system/full_page_cache/trident/api_token" xsi:type="string">1</item>
+            </argument>
+        </arguments>
+    </type>
+
+</config>

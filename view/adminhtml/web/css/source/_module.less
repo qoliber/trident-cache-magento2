@@ -1,0 +1,206 @@
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+// Variables
+@trident-primary: #1979c3;
+@trident-success: #79a22e;
+@trident-warning: #eb5202;
+@trident-info: #006bb4;
+@trident-border: #e3e3e3;
+@trident-bg: #f8f8f8;
+
+// Stats Container
+.trident-stats-container,
+.trident-purge-container {
+    padding: 20px;
+}
+
+// Grid Layout
+.trident-stats-grid,
+.trident-purge-grid {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+// Cards
+.trident-card {
+    background: #fff;
+    border: 1px solid @trident-border;
+    border-radius: 4px;
+    padding: 20px;
+
+    &-title {
+        border-bottom: 1px solid @trident-border;
+        color: #303030;
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 15px;
+        padding-bottom: 10px;
+    }
+
+    &-description {
+        color: #666;
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 15px;
+    }
+
+    &-overview {
+        border-left: 4px solid @trident-primary;
+    }
+
+    &-hits {
+        border-left: 4px solid @trident-success;
+    }
+
+    &-evictions {
+        border-left: 4px solid @trident-warning;
+    }
+
+    &-tags {
+        border-left: 4px solid @trident-info;
+    }
+
+    &-compression {
+        border-left: 4px solid #9b59b6;
+    }
+
+    &-purge-all {
+        border-left: 4px solid @trident-warning;
+    }
+
+    &-purge-tags {
+        border-left: 4px solid @trident-info;
+    }
+
+    &-reference {
+        border-left: 4px solid #666;
+        grid-column: 1 / -1;
+    }
+}
+
+// Stats Row
+.trident-stats-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+// Individual Stat
+.trident-stat {
+    flex: 1;
+    min-width: 100px;
+    text-align: center;
+
+    &-value {
+        color: #303030;
+        display: block;
+        font-size: 24px;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+
+    &-label {
+        color: #666;
+        display: block;
+        font-size: 12px;
+        margin-top: 5px;
+        text-transform: uppercase;
+    }
+
+    &-hit .trident-stat-value {
+        color: @trident-success;
+    }
+
+    &-miss .trident-stat-value {
+        color: @trident-warning;
+    }
+
+    &-pass .trident-stat-value {
+        color: #666;
+    }
+
+    &-ratio .trident-stat-value {
+        color: @trident-primary;
+    }
+}
+
+// Forms
+.trident-form {
+    .admin__field {
+        margin-bottom: 15px;
+    }
+
+    .admin__control-text {
+        width: 100%;
+    }
+}
+
+// API Info
+.trident-api-info {
+    background: @trident-bg;
+    border-radius: 4px;
+    margin-top: 20px;
+    padding: 15px;
+
+    p {
+        margin: 0;
+
+        strong {
+            color: #303030;
+        }
+    }
+}
+
+// Reference Table
+.trident-card-reference {
+    code {
+        background: @trident-bg;
+        border-radius: 3px;
+        font-family: monospace;
+        padding: 2px 6px;
+    }
+
+    .admin__table-primary {
+        margin-top: 10px;
+        width: 100%;
+
+        th,
+        td {
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        th {
+            background: @trident-bg;
+            font-weight: 600;
+        }
+
+        tr:hover td {
+            background: @trident-bg;
+        }
+    }
+}
+
+// Responsive adjustments
+@media (max-width: 768px) {
+    .trident-stats-grid,
+    .trident-purge-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .trident-stats-row {
+        flex-direction: column;
+    }
+
+    .trident-stat {
+        min-width: auto;
+        text-align: left;
+    }
+}

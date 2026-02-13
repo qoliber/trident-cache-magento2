@@ -1,0 +1,134 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Stats;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Stats $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-purge-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <div class="trident-purge-grid">
+            <!-- Purge All -->
+            <div class="trident-card trident-card-purge-all">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Purge All Cache')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('This will remove all cached entries from Trident. Use with caution on production sites as it may temporarily increase server load.')) ?>
+                </p>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/cache/purgeAll')) ?>" method="post">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <button type="submit" class="action-default scalable primary" onclick="return confirm('<?= $escaper->escapeJs(__('Are you sure you want to purge all cache entries?')) ?>')">
+                        <span><?= $escaper->escapeHtml(__('Purge All Cache')) ?></span>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Purge by Tags -->
+            <div class="trident-card trident-card-purge-tags">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Purge by Cache Tags')) ?></h3>
+                <p class="trident-card-description">
+                    <?= $escaper->escapeHtml(__('Enter comma-separated cache tags to purge specific entries. Common tags: product, category, cms, home, product-{id}, category-{id}')) ?>
+                </p>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/cache/purgeTags')) ?>" method="post" class="trident-form">
+                    <?= $block->getBlockHtml('formkey') ?>
+                    <div class="admin__field">
+                        <label class="admin__field-label" for="trident_tags">
+                            <span><?= $escaper->escapeHtml(__('Cache Tags')) ?></span>
+                        </label>
+                        <div class="admin__field-control">
+                            <input type="text"
+                                   id="trident_tags"
+                                   name="tags"
+                                   class="admin__control-text"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., product-123, category-5')) ?>"
+                                   required/>
+                        </div>
+                    </div>
+                    <button type="submit" class="action-default scalable">
+                        <span><?= $escaper->escapeHtml(__('Purge Tags')) ?></span>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Common Tags Reference -->
+            <div class="trident-card trident-card-reference">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Cache Tags Reference')) ?></h3>
+                <table class="admin__table-primary">
+                    <thead>
+                        <tr>
+                            <th><?= $escaper->escapeHtml(__('Tag Pattern')) ?></th>
+                            <th><?= $escaper->escapeHtml(__('Description')) ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>magento</code></td>
+                            <td><?= $escaper->escapeHtml(__('All Magento pages')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>product</code></td>
+                            <td><?= $escaper->escapeHtml(__('All product pages')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>product-{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Specific product by ID')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>category</code></td>
+                            <td><?= $escaper->escapeHtml(__('All category pages')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>category-{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Specific category by ID')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>cms</code></td>
+                            <td><?= $escaper->escapeHtml(__('All CMS pages')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>cms-page-{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Specific CMS page by ID')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>cms-block-{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Specific CMS block by ID')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>home</code></td>
+                            <td><?= $escaper->escapeHtml(__('Homepage')) ?></td>
+                        </tr>
+                        <tr>
+                            <td><code>product-list</code></td>
+                            <td><?= $escaper->escapeHtml(__('All product listing pages')) ?></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="trident-api-info">
+            <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+        </div>
+    <?php endif; ?>
+</div>

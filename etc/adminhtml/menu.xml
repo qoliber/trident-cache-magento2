@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Backend:etc/menu.xsd">
+    <menu>
+        <add id="Qoliber_TridentCache::trident"
+             title="Trident Cache"
+             module="Qoliber_TridentCache"
+             parent="Magento_Backend::system"
+             resource="Qoliber_TridentCache::config"
+             sortOrder="100"/>
+        <add id="Qoliber_TridentCache::stats"
+             title="Cache Statistics"
+             module="Qoliber_TridentCache"
+             parent="Qoliber_TridentCache::trident"
+             action="trident/cache/stats"
+             resource="Qoliber_TridentCache::stats"
+             sortOrder="10"/>
+        <add id="Qoliber_TridentCache::purge"
+             title="Purge Cache"
+             module="Qoliber_TridentCache"
+             parent="Qoliber_TridentCache::trident"
+             action="trident/cache/purge"
+             resource="Qoliber_TridentCache::purge"
+             sortOrder="20"/>
+    </menu>
+</config>

@@ -1,0 +1,146 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Stats;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Stats $viewModel */
+$viewModel = $block->getData('view_model');
+?>
+
+<div class="trident-stats-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php $stats = $viewModel->getStats(); ?>
+        <?php if ($stats === null): ?>
+            <div class="message message-error">
+                <span><?= $escaper->escapeHtml(__('Unable to connect to Trident API at %1. Please check the connection and credentials.', $viewModel->getApiUrl())) ?></span>
+            </div>
+        <?php else: ?>
+            <div class="trident-stats-grid">
+                <!-- Cache Overview -->
+                <div class="trident-card trident-card-overview">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Cache Overview')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['entries'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Cached Entries')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes((int)($stats['memory_used'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Memory Used')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes((int)($stats['max_memory'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Max Memory')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatPercentage((float)($stats['memory_usage_percent'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Memory Usage')) ?></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hit Ratio -->
+                <div class="trident-card trident-card-hits">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Cache Performance')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat trident-stat-hit">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['hits'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Cache Hits')) ?></span>
+                        </div>
+                        <div class="trident-stat trident-stat-miss">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['misses'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Cache Misses')) ?></span>
+                        </div>
+                        <div class="trident-stat trident-stat-pass">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['passes'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Bypassed')) ?></span>
+                        </div>
+                        <div class="trident-stat trident-stat-ratio">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatPercentage((float)($stats['hit_ratio'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Hit Ratio')) ?></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Evictions -->
+                <div class="trident-card trident-card-evictions">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Evictions')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['evictions'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Total Evictions')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes((int)($stats['evicted_bytes'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Evicted Bytes')) ?></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tags Index -->
+                <div class="trident-card trident-card-tags">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Tag Index')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['unique_tags'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Unique Tags')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['indexed_keys'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Indexed Keys')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes((int)($stats['tag_index_memory_bytes'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Index Memory')) ?></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Compression -->
+                <?php if (isset($stats['compressed_entries']) && $stats['compressed_entries'] > 0): ?>
+                <div class="trident-card trident-card-compression">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Compression')) ?></h3>
+                    <div class="trident-stats-row">
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)$stats['compressed_entries'])) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Compressed Entries')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml(number_format((float)($stats['compression_ratio'] ?? 1), 2) . 'x') ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Compression Ratio')) ?></span>
+                        </div>
+                        <div class="trident-stat">
+                            <span class="trident-stat-value"><?= $escaper->escapeHtml($viewModel->formatBytes((int)($stats['compression_bytes_saved'] ?? 0))) ?></span>
+                            <span class="trident-stat-label"><?= $escaper->escapeHtml(__('Bytes Saved')) ?></span>
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
+            </div>
+
+            <div class="trident-api-info">
+                <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
+            </div>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>
