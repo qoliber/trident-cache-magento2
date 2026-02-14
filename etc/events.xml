@@ -11,26 +11,6 @@
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:noNamespaceSchemaLocation="urn:magento:framework:Event/etc/events.xsd">
 
-    <!-- Product save - invalidate cache -->
-    <event name="catalog_product_save_after">
-        <observer name="trident_cache_product_save" instance="Qoliber\TridentCache\Observer\ProductSaveObserver"/>
-    </event>
-
-    <!-- Category save - invalidate cache -->
-    <event name="catalog_category_save_after">
-        <observer name="trident_cache_category_save" instance="Qoliber\TridentCache\Observer\CategorySaveObserver"/>
-    </event>
-
-    <!-- CMS Page save - invalidate cache -->
-    <event name="cms_page_save_after">
-        <observer name="trident_cache_cms_page_save" instance="Qoliber\TridentCache\Observer\CmsPageSaveObserver"/>
-    </event>
-
-    <!-- CMS Block save - invalidate cache -->
-    <event name="cms_block_save_after">
-        <observer name="trident_cache_cms_block_save" instance="Qoliber\TridentCache\Observer\CmsBlockSaveObserver"/>
-    </event>
-
     <!-- Full page cache flush (admin action) -->
     <event name="adminhtml_cache_flush_all">
         <observer name="trident_cache_flush_all" instance="Qoliber\TridentCache\Observer\CacheFlushObserver"/>
