@@ -26,6 +26,11 @@
         <plugin name="trident_cache_type" type="Qoliber\TridentCache\Plugin\CacheTypePlugin" sortOrder="100"/>
     </type>
 
+    <!-- Add "Purge Trident Cache" button to Cache Management page -->
+    <type name="Magento\Backend\Block\Cache">
+        <plugin name="trident_cache_block" type="Qoliber\TridentCache\Plugin\CacheBlockPlugin" sortOrder="10"/>
+    </type>
+
     <!-- Mark Trident config as sensitive/environment -->
     <type name="Magento\Config\Model\Config\TypePool">
         <arguments>

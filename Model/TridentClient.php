@@ -200,7 +200,7 @@ class TridentClient
             ]);
 
             $apiUrl = rtrim($this->config->getApiUrl(), '/');
-            $this->curl->post($apiUrl . '/admin/purge/pattern', $payload);
+            $this->curl->post($apiUrl . '/admin/purge/urls', $payload);
 
             $response = $this->curl->getBody();
             $result = json_decode($response, true);

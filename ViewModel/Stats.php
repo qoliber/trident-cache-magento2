@@ -71,6 +71,11 @@ class Stats implements ArgumentInterface
         return number_format($number, 0, '.', ',');
     }
 
+    public function isSoftPurgeEnabled(): bool
+    {
+        return $this->config->isSoftPurgeEnabled();
+    }
+
     public function formatPercentage(float $value): string
     {
         return number_format($value, 2) . '%';

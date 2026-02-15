@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+-->
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <head>
+        <css src="Qoliber_TridentCache::css/source/_module.less"/>
+    </head>
+    <body>
+        <referenceContainer name="content">
+            <block class="Magento\Backend\Block\Template"
+                   name="trident.cache.status"
+                   template="Qoliber_TridentCache::cache_status.phtml"
+                   before="-">
+                <arguments>
+                    <argument name="view_model" xsi:type="object">Qoliber\TridentCache\ViewModel\Stats</argument>
+                </arguments>
+            </block>
+        </referenceContainer>
+    </body>
+</page>

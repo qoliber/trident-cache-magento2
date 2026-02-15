@@ -1,21 +1,24 @@
 # Qoliber_TridentCache — Open Issues
 
-## Duplicate purge calls on every entity save
+## PurgeStrategy (disabled)
 
-Both `CacheTypePlugin` and `FlushCacheByTagsObserver` fire on the same native Magento flow:
+`PurgeStrategy::filterTags()` filters out category listing tags (`cat_c_p_{id}`) for product
+saves where only detail-level attributes changed. This avoids unnecessary category page
+invalidation when e.g. only the product description was updated.
 
-```
-AbstractModel::afterSave()
-  → cleanModelCache()
-    → dispatches 'clean_cache_by_tags'        ← FlushCacheByTagsObserver fires
-    → calls PageCache\Type::clean($tags)      ← CacheTypePlugin fires
-```
+Currently disabled (`ENABLED = false`). TODO: wire to admin config flag and test with
+anchored categories, flat catalog, and ElasticSuite before enabling.
 
-Every save sends **two** identical purge requests to Trident. Pick one:
+## Design Notes
 
-- **Keep only CacheTypePlugin** — catches everything at the cache layer, including cron and programmatic flushes
-- **Keep only FlushCacheByTagsObserver** — more explicit, uses TagResolver, but might miss direct `Type::clean()` calls
+### Duplicate purge on entity save (accepted)
 
-## PurgeStrategy optimization removed
+On entity save, both `FlushCacheByTagsObserver` (via `clean_cache_by_tags` event) and
+`CacheTypePlugin` (via `Type::clean()` plugin) fire tag-based purge. This is intentional:
 
-Entity-specific observers were removed (redundant with native flow). The `PurgeStrategy` excluded category tags when only detail attributes changed on a product. If this optimization matters for performance, move the logic into `FlushCacheByTagsObserver` with an `instanceof Product` check.
+- `FlushCacheByTagsObserver` — primary path, uses `Tag\Resolver` + `PurgeStrategy`
+- `CacheTypePlugin` — safety net, catches programmatic `Type::clean(tags)` calls
+  that bypass the `clean_cache_by_tags` event (custom modules, third-party extensions)
+
+The duplicate on entity save is harmless (idempotent, local HTTP call to Trident API).
+This gives us MORE coverage than Magento's own Varnish integration, which only uses events.

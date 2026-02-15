@@ -16,6 +16,7 @@ use Magento\Framework\App\Cache\Tag\Resolver;
 use Magento\Framework\Event\Observer;
 use Magento\Framework\Event\ObserverInterface;
 use Qoliber\TridentCache\Model\Config;
+use Qoliber\TridentCache\Model\PurgeStrategy;
 use Qoliber\TridentCache\Model\TridentClient;
 
 class FlushCacheByTagsObserver implements ObserverInterface
@@ -23,7 +24,8 @@ class FlushCacheByTagsObserver implements ObserverInterface
     public function __construct(
         private readonly TridentClient $tridentClient,
         private readonly Config $config,
-        private readonly Resolver $tagResolver
+        private readonly Resolver $tagResolver,
+        private readonly PurgeStrategy $purgeStrategy
     ) {
     }
 
@@ -41,7 +43,7 @@ class FlushCacheByTagsObserver implements ObserverInterface
         $tags = $this->tagResolver->getTags($object);
 
         if (!empty($tags)) {
-            // Send native Magento tags directly - Trident reads X-Magento-Tags as-is
+            $tags = $this->purgeStrategy->filterTags($object, $tags);
             $normalizedTags = array_unique(array_map('strtolower', $tags));
             $this->tridentClient->purgeTags($normalizedTags);
         }

@@ -188,6 +188,72 @@
     }
 }
 
+// Cache Management Status Bar
+.trident-cache-status {
+    background: #fff;
+    border: 1px solid @trident-border;
+    border-left: 4px solid @trident-primary;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    padding: 20px;
+}
+
+.trident-status-title {
+    color: #303030;
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0 0 15px;
+}
+
+.trident-status-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.trident-status-stat {
+    flex: 1;
+    min-width: 100px;
+    text-align: center;
+}
+
+.trident-status-value {
+    color: #303030;
+    display: block;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.trident-status-label {
+    color: #666;
+    display: block;
+    font-size: 11px;
+    margin-top: 4px;
+    text-transform: uppercase;
+}
+
+.trident-status-hit {
+    color: @trident-success;
+}
+
+.trident-status-link {
+    border-top: 1px solid @trident-border;
+    margin-top: 15px;
+    padding-top: 10px;
+    text-align: right;
+
+    a {
+        color: @trident-primary;
+        font-size: 13px;
+        text-decoration: none;
+
+        &:hover {
+            text-decoration: underline;
+        }
+    }
+}
+
 // Responsive adjustments
 @media (max-width: 768px) {
     .trident-stats-grid,
@@ -200,6 +266,15 @@
     }
 
     .trident-stat {
+        min-width: auto;
+        text-align: left;
+    }
+
+    .trident-status-grid {
+        flex-direction: column;
+    }
+
+    .trident-status-stat {
         min-width: auto;
         text-align: left;
     }

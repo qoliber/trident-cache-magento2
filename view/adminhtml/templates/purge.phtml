@@ -48,7 +48,7 @@ $viewModel = $block->getData('view_model');
             <div class="trident-card trident-card-purge-tags">
                 <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Purge by Cache Tags')) ?></h3>
                 <p class="trident-card-description">
-                    <?= $escaper->escapeHtml(__('Enter comma-separated cache tags to purge specific entries. Common tags: product, category, cms, home, product-{id}, category-{id}')) ?>
+                    <?= $escaper->escapeHtml(__('Enter comma-separated cache tags to purge specific entries (e.g. cat_p_42, cat_c_5). Tags must match the X-Magento-Tags header values exactly.')) ?>
                 </p>
                 <form action="<?= $escaper->escapeUrl($block->getUrl('trident/cache/purgeTags')) ?>" method="post" class="trident-form">
                     <?= $block->getBlockHtml('formkey') ?>
@@ -61,7 +61,7 @@ $viewModel = $block->getData('view_model');
                                    id="trident_tags"
                                    name="tags"
                                    class="admin__control-text"
-                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., product-123, category-5')) ?>"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., cat_p_123, cat_c_5, cms_p_2')) ?>"
                                    required/>
                         </div>
                     </div>
@@ -83,44 +83,32 @@ $viewModel = $block->getData('view_model');
                     </thead>
                     <tbody>
                         <tr>
-                            <td><code>magento</code></td>
-                            <td><?= $escaper->escapeHtml(__('All Magento pages')) ?></td>
-                        </tr>
-                        <tr>
-                            <td><code>product</code></td>
+                            <td><code>cat_p</code></td>
                             <td><?= $escaper->escapeHtml(__('All product pages')) ?></td>
                         </tr>
                         <tr>
-                            <td><code>product-{id}</code></td>
-                            <td><?= $escaper->escapeHtml(__('Specific product by ID')) ?></td>
+                            <td><code>cat_p_{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Specific product by ID (e.g. cat_p_42)')) ?></td>
                         </tr>
                         <tr>
-                            <td><code>category</code></td>
+                            <td><code>cat_c</code></td>
                             <td><?= $escaper->escapeHtml(__('All category pages')) ?></td>
                         </tr>
                         <tr>
-                            <td><code>category-{id}</code></td>
-                            <td><?= $escaper->escapeHtml(__('Specific category by ID')) ?></td>
+                            <td><code>cat_c_{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Specific category by ID (e.g. cat_c_5)')) ?></td>
                         </tr>
                         <tr>
-                            <td><code>cms</code></td>
-                            <td><?= $escaper->escapeHtml(__('All CMS pages')) ?></td>
+                            <td><code>cat_c_p_{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Category listing entries containing product (e.g. cat_c_p_42)')) ?></td>
                         </tr>
                         <tr>
-                            <td><code>cms-page-{id}</code></td>
-                            <td><?= $escaper->escapeHtml(__('Specific CMS page by ID')) ?></td>
+                            <td><code>cms_p_{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Specific CMS page by ID (e.g. cms_p_6)')) ?></td>
                         </tr>
                         <tr>
-                            <td><code>cms-block-{id}</code></td>
-                            <td><?= $escaper->escapeHtml(__('Specific CMS block by ID')) ?></td>
-                        </tr>
-                        <tr>
-                            <td><code>home</code></td>
-                            <td><?= $escaper->escapeHtml(__('Homepage')) ?></td>
-                        </tr>
-                        <tr>
-                            <td><code>product-list</code></td>
-                            <td><?= $escaper->escapeHtml(__('All product listing pages')) ?></td>
+                            <td><code>cms_b_{id}</code></td>
+                            <td><?= $escaper->escapeHtml(__('Specific CMS block by ID (e.g. cms_b_3)')) ?></td>
                         </tr>
                     </tbody>
                 </table>

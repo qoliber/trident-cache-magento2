@@ -1,0 +1,69 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Stats;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Stats $viewModel */
+$viewModel = $block->getData('view_model');
+
+if (!$viewModel->isTridentConfigured()) {
+    return;
+}
+
+$stats = $viewModel->isEnabled() ? $viewModel->getStats() : null;
+$mode = $viewModel->isSoftPurgeEnabled() ? __('Soft Purge') : __('Hard Purge');
+?>
+
+<div class="trident-cache-status">
+    <h2 class="trident-status-title"><?= $escaper->escapeHtml(__('Trident Cache')) ?></h2>
+
+    <?php if ($stats === null): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Unable to connect to Trident API at %1', $viewModel->getApiUrl())) ?></span>
+        </div>
+    <?php else: ?>
+        <div class="trident-status-grid">
+            <div class="trident-status-stat">
+                <span class="trident-status-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['entries'] ?? 0))) ?></span>
+                <span class="trident-status-label"><?= $escaper->escapeHtml(__('Entries')) ?></span>
+            </div>
+            <div class="trident-status-stat">
+                <span class="trident-status-value"><?= $escaper->escapeHtml($viewModel->formatBytes((int)($stats['memory_used'] ?? 0))) ?></span>
+                <span class="trident-status-label"><?= $escaper->escapeHtml(__('Memory')) ?></span>
+            </div>
+            <div class="trident-status-stat">
+                <span class="trident-status-value trident-status-hit"><?= $escaper->escapeHtml($viewModel->formatPercentage((float)($stats['hit_ratio'] ?? 0))) ?></span>
+                <span class="trident-status-label"><?= $escaper->escapeHtml(__('Hit Ratio')) ?></span>
+            </div>
+            <div class="trident-status-stat">
+                <span class="trident-status-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['hits'] ?? 0))) ?></span>
+                <span class="trident-status-label"><?= $escaper->escapeHtml(__('Hits')) ?></span>
+            </div>
+            <div class="trident-status-stat">
+                <span class="trident-status-value"><?= $escaper->escapeHtml($viewModel->formatNumber((int)($stats['misses'] ?? 0))) ?></span>
+                <span class="trident-status-label"><?= $escaper->escapeHtml(__('Misses')) ?></span>
+            </div>
+            <div class="trident-status-stat">
+                <span class="trident-status-value"><?= $escaper->escapeHtml((string)$mode) ?></span>
+                <span class="trident-status-label"><?= $escaper->escapeHtml(__('Purge Mode')) ?></span>
+            </div>
+        </div>
+        <div class="trident-status-link">
+            <a href="<?= $escaper->escapeUrl($block->getUrl('trident/cache/stats')) ?>">
+                <?= $escaper->escapeHtml(__('View full statistics')) ?> &rarr;
+            </a>
+        </div>
+    <?php endif; ?>
+</div>

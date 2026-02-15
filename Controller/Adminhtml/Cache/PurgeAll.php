@@ -53,6 +53,6 @@ class PurgeAll extends Action
             );
         }
 
-        return $resultRedirect->setPath('trident/cache/purge');
+        return $resultRedirect->setRefererOrBaseUrl();
     }
 }
