@@ -2,7 +2,7 @@
     "name": "qoliber/trident-cache-magento2",
     "description": "Trident Cache integration module for Magento 2",
     "type": "magento2-module",
-    "version": "1.0.2",
+    "version": "1.0.1",
     "license": "MIT",
     "require": {
         "php": ">=8.1",

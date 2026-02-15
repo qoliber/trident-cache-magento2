@@ -34,6 +34,11 @@ class CacheBlockPlugin
             return $result;
         }
 
+        $buttonList = $subject->getButtonList();
+        if ($buttonList === null) {
+            return $result;
+        }
+
         $mode = $this->config->isSoftPurgeEnabled() ? __('Soft Purge') : __('Hard Purge');
         $message = $subject->escapeJs(
             $subject->escapeHtml(
@@ -41,7 +46,7 @@ class CacheBlockPlugin
             )
         );
 
-        $subject->getButtonList()->add(
+        $buttonList->add(
             'flush_trident',
             [
                 'label' => __('Purge Trident Cache'),
