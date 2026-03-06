@@ -1,0 +1,236 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Tags;
+
+/** @var Template $block */
+/** @var Escaper $escaper */
+/** @var Tags $viewModel */
+$viewModel = $block->getData('view_model');
+
+$page = max(1, (int)$block->getRequest()->getParam('page', 1));
+$prefix = $block->getRequest()->getParam('prefix', '');
+$sort = $block->getRequest()->getParam('sort', 'count');
+$limit = 100;
+$offset = ($page - 1) * $limit;
+?>
+
+<div class="trident-tags-container">
+    <?php if (!$viewModel->isTridentConfigured()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is not configured as the caching application. Please go to Stores > Configuration > Advanced > System > Full Page Cache and select "Trident" as the caching application.')) ?></span>
+        </div>
+    <?php elseif (!$viewModel->isEnabled()): ?>
+        <div class="message message-warning">
+            <span><?= $escaper->escapeHtml(__('Trident Cache is enabled but the API URL is not configured. Please configure the API URL in Stores > Configuration > Advanced > System > Full Page Cache > Trident Configuration.')) ?></span>
+        </div>
+    <?php else: ?>
+        <?php $data = $viewModel->getTags($offset, $limit, $prefix ?: null, $sort); ?>
+        <?php if ($data === null): ?>
+            <div class="message message-error">
+                <span><?= $escaper->escapeHtml(__('Unable to connect to Trident API at %1. Please check the connection and credentials.', $viewModel->getApiUrl())) ?></span>
+            </div>
+        <?php else: ?>
+            <?php
+            $tags = $data['tags'] ?? [];
+            $total = (int)($data['total'] ?? 0);
+            $totalPages = max(1, (int)ceil($total / $limit));
+            ?>
+
+            <!-- Filters -->
+            <div class="trident-card trident-card-filters">
+                <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Filter Tags')) ?></h3>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/cache/tags')) ?>" method="get" class="trident-filter-form">
+                    <div class="trident-filter-row">
+                        <div class="trident-filter-field">
+                            <label for="trident_prefix"><?= $escaper->escapeHtml(__('Tag Prefix')) ?></label>
+                            <input type="text"
+                                   id="trident_prefix"
+                                   name="prefix"
+                                   class="admin__control-text"
+                                   value="<?= $escaper->escapeHtmlAttr($prefix) ?>"
+                                   placeholder="<?= $escaper->escapeHtmlAttr(__('e.g., cat_p')) ?>"/>
+                        </div>
+                        <div class="trident-filter-field">
+                            <label for="trident_sort"><?= $escaper->escapeHtml(__('Sort By')) ?></label>
+                            <select id="trident_sort" name="sort" class="admin__control-select">
+                                <option value="count" <?= $sort === 'count' ? 'selected' : '' ?>><?= $escaper->escapeHtml(__('Entry Count')) ?></option>
+                                <option value="name" <?= $sort === 'name' ? 'selected' : '' ?>><?= $escaper->escapeHtml(__('Tag Name')) ?></option>
+                            </select>
+                        </div>
+                        <div class="trident-filter-actions">
+                            <button type="submit" class="action-default scalable">
+                                <span><?= $escaper->escapeHtml(__('Search')) ?></span>
+                            </button>
+                            <?php if ($prefix): ?>
+                                <a href="<?= $escaper->escapeUrl($block->getUrl('trident/cache/tags')) ?>" class="action-default scalable">
+                                    <span><?= $escaper->escapeHtml(__('Clear')) ?></span>
+                                </a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Results Info -->
+            <div class="trident-results-info">
+                <span>
+                    <?= $escaper->escapeHtml(__(
+                        'Showing %1-%2 of %3 tags',
+                        $viewModel->formatNumber($total > 0 ? $offset + 1 : 0),
+                        $viewModel->formatNumber(min($offset + $limit, $total)),
+                        $viewModel->formatNumber($total)
+                    )) ?>
+                    <?php if ($prefix): ?>
+                        &mdash; <?= $escaper->escapeHtml(__('filtered by prefix:')) ?>
+                        <code><?= $escaper->escapeHtml($prefix) ?></code>
+                    <?php endif; ?>
+                </span>
+            </div>
+
+            <!-- Tags Table -->
+            <?php if (!empty($tags)): ?>
+                <div class="trident-table-wrapper">
+                    <table class="admin__table-primary trident-tags-table">
+                        <thead>
+                            <tr>
+                                <th><?= $escaper->escapeHtml(__('Tag Name')) ?></th>
+                                <th class="trident-col-right"><?= $escaper->escapeHtml(__('Entry Count')) ?></th>
+                                <th><?= $escaper->escapeHtml(__('Actions')) ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($tags as $tag): ?>
+                                <?php
+                                $tagName = $tag['tag'] ?? $tag['name'] ?? '';
+                                $count = (int)($tag['count'] ?? $tag['entry_count'] ?? 0);
+                                ?>
+                                <tr id="tag-<?= $escaper->escapeHtmlAttr(md5($tagName)) ?>">
+                                    <td>
+                                        <code class="trident-tag-name"><?= $escaper->escapeHtml($tagName) ?></code>
+                                    </td>
+                                    <td class="trident-col-right">
+                                        <?= $escaper->escapeHtml($viewModel->formatNumber($count)) ?>
+                                    </td>
+                                    <td class="trident-col-actions">
+                                        <a href="<?= $escaper->escapeUrl($block->getUrl('trident/cache/entries', ['tag_filter' => $tagName])) ?>"
+                                           class="action-default scalable"
+                                           title="<?= $escaper->escapeHtmlAttr(__('View entries with this tag')) ?>">
+                                            <span><?= $escaper->escapeHtml(__('View Entries')) ?></span>
+                                        </a>
+                                        <button type="button"
+                                                class="action-default scalable trident-purge-tag-btn"
+                                                data-tag="<?= $escaper->escapeHtmlAttr($tagName) ?>"
+                                                data-row="tag-<?= $escaper->escapeHtmlAttr(md5($tagName)) ?>">
+                                            <span><?= $escaper->escapeHtml(__('Purge Tag')) ?></span>
+                                        </button>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                <?php if ($totalPages > 1): ?>
+                    <div class="trident-pagination">
+                        <?php if ($page > 1): ?>
+                            <a href="<?= $escaper->escapeUrl($block->getUrl('trident/cache/tags', [
+                                'page' => $page - 1,
+                                'prefix' => $prefix,
+                                'sort' => $sort,
+                            ])) ?>" class="action-default scalable">
+                                <span><?= $escaper->escapeHtml(__('Previous')) ?></span>
+                            </a>
+                        <?php endif; ?>
+
+                        <span class="trident-page-info">
+                            <?= $escaper->escapeHtml(__('Page %1 of %2', $page, $totalPages)) ?>
+                        </span>
+
+                        <?php if ($page < $totalPages): ?>
+                            <a href="<?= $escaper->escapeUrl($block->getUrl('trident/cache/tags', [
+                                'page' => $page + 1,
+                                'prefix' => $prefix,
+                                'sort' => $sort,
+                            ])) ?>" class="action-default scalable">
+                                <span><?= $escaper->escapeHtml(__('Next')) ?></span>
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
+            <?php else: ?>
+                <div class="message message-notice">
+                    <span><?= $escaper->escapeHtml(__('No cache tags found.')) ?></span>
+                </div>
+            <?php endif; ?>
+        <?php endif; ?>
+    <?php endif; ?>
+</div>
+
+<script>
+    (function() {
+        var purgeUrl = '<?= $escaper->escapeJs($block->getUrl('trident/cache/purgeTag')) ?>';
+        var formKey = '<?= $escaper->escapeJs($block->getFormKey()) ?>';
+
+        document.querySelectorAll('.trident-purge-tag-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var tag = btn.getAttribute('data-tag');
+                if (!confirm('<?= $escaper->escapeJs(__('Are you sure you want to purge all entries with tag')) ?> "' + tag + '"?')) {
+                    return;
+                }
+
+                var rowId = btn.getAttribute('data-row');
+
+                btn.disabled = true;
+                btn.querySelector('span').textContent = '<?= $escaper->escapeJs(__('Purging...')) ?>';
+
+                fetch(purgeUrl + '?form_key=' + encodeURIComponent(formKey), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({
+                        tag: tag
+                    })
+                })
+                .then(function(response) {
+                    if (!response.ok) {
+                        throw new Error('HTTP ' + response.status);
+                    }
+                    return response.json();
+                })
+                .then(function(data) {
+                    if (data.success) {
+                        var row = document.getElementById(rowId);
+                        if (row) {
+                            row.style.opacity = '0.4';
+                        }
+                        btn.querySelector('span').textContent = '<?= $escaper->escapeJs(__('Purged')) ?>';
+                        btn.classList.add('trident-purged');
+                    } else {
+                        btn.disabled = false;
+                        btn.querySelector('span').textContent = '<?= $escaper->escapeJs(__('Purge Tag')) ?>';
+                        alert(data.message || '<?= $escaper->escapeJs(__('Failed to purge tag')) ?>');
+                    }
+                })
+                .catch(function() {
+                    btn.disabled = false;
+                    btn.querySelector('span').textContent = '<?= $escaper->escapeJs(__('Purge Tag')) ?>';
+                    alert('<?= $escaper->escapeJs(__('Network error. Please try again.')) ?>');
+                });
+            });
+        });
+    })();
+</script>

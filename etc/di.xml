@@ -26,6 +26,11 @@
         <plugin name="trident_cache_type" type="Qoliber\TridentCache\Plugin\CacheTypePlugin" sortOrder="100"/>
     </type>
 
+    <!-- Map Trident type (3) to Varnish (2) so core FPC plugins activate -->
+    <type name="Magento\PageCache\Model\Config">
+        <plugin name="trident_config_type" type="Qoliber\TridentCache\Plugin\PageCache\ConfigTypePlugin" sortOrder="1"/>
+    </type>
+
     <!-- Add "Purge Trident Cache" button to Cache Management page -->
     <type name="Magento\Backend\Block\Cache">
         <plugin name="trident_cache_block" type="Qoliber\TridentCache\Plugin\CacheBlockPlugin" sortOrder="10"/>

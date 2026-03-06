@@ -177,6 +177,188 @@ class TridentClient
     }
 
     /**
+     * Get Trident health status
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getHealth(): ?array
+    {
+        if (!$this->isEnabled()) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders([
+                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+            ]);
+
+            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->curl->get($apiUrl . '/admin/health');
+
+            $response = $this->curl->getBody();
+            return json_decode($response, true);
+        } catch (\Exception $e) {
+            $this->logger->error('Trident health check failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Get cache entries with optional filtering
+     *
+     * @param int $offset
+     * @param int $limit
+     * @param string|null $tag
+     * @param string $sort
+     * @return array<string, mixed>|null
+     */
+    public function getEntries(int $offset = 0, int $limit = 50, ?string $tag = null, string $sort = 'age'): ?array
+    {
+        if (!$this->isEnabled()) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders([
+                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+            ]);
+
+            $params = ['offset' => $offset, 'limit' => $limit, 'sort' => $sort];
+            if ($tag !== null && $tag !== '') {
+                $params['tag'] = $tag;
+            }
+
+            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->curl->get($apiUrl . '/admin/cache/entries?' . http_build_query($params));
+
+            $response = $this->curl->getBody();
+            return json_decode($response, true);
+        } catch (\Exception $e) {
+            $this->logger->error('Trident get entries failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Get cache tags with optional prefix filtering
+     *
+     * @param int $offset
+     * @param int $limit
+     * @param string|null $prefix
+     * @param string $sort
+     * @return array<string, mixed>|null
+     */
+    public function getTags(int $offset = 0, int $limit = 100, ?string $prefix = null, string $sort = 'count'): ?array
+    {
+        if (!$this->isEnabled()) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders([
+                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+            ]);
+
+            $params = ['offset' => $offset, 'limit' => $limit, 'sort' => $sort];
+            if ($prefix !== null && $prefix !== '') {
+                $params['prefix'] = $prefix;
+            }
+
+            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->curl->get($apiUrl . '/admin/cache/tags?' . http_build_query($params));
+
+            $response = $this->curl->getBody();
+            return json_decode($response, true);
+        } catch (\Exception $e) {
+            $this->logger->error('Trident get tags failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Get top URLs by request count
+     *
+     * @param int $limit
+     * @param string $sort
+     * @return array<string, mixed>|null
+     */
+    public function getTopUrls(int $limit = 20, string $sort = 'requests'): ?array
+    {
+        if (!$this->isEnabled()) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders([
+                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+            ]);
+
+            $params = ['limit' => $limit, 'sort' => $sort];
+
+            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->curl->get($apiUrl . '/admin/stats/top?' . http_build_query($params));
+
+            $response = $this->curl->getBody();
+            return json_decode($response, true);
+        } catch (\Exception $e) {
+            $this->logger->error('Trident get top urls failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Purge a single URL from cache
+     *
+     * @param string $url
+     * @param string|null $host
+     * @return array<string, mixed>|null
+     */
+    public function purgeUrl(string $url, ?string $host = null): ?array
+    {
+        if (!$this->isEnabled() || empty($url)) {
+            return null;
+        }
+
+        try {
+            $this->curl->setHeaders([
+                'Authorization' => 'Bearer ' . $this->config->getApiToken(),
+                'Content-Type' => 'application/json',
+            ]);
+
+            $data = [
+                'url' => $url,
+                'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
+            ];
+
+            if ($host !== null && $host !== '') {
+                $data['host'] = $host;
+            }
+
+            $apiUrl = rtrim($this->config->getApiUrl(), '/');
+            $this->curl->post($apiUrl . '/admin/purge/url', json_encode($data));
+
+            $response = $this->curl->getBody();
+            $result = json_decode($response, true);
+
+            if ($this->config->isDebugEnabled()) {
+                $this->logger->info('Trident cache purge url', [
+                    'url' => $url,
+                    'host' => $host,
+                    'result' => $result,
+                ]);
+            }
+
+            return $result;
+        } catch (\Exception $e) {
+            $this->logger->error('Trident cache purge url failed', [
+                'url' => $url,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
      * Purge cache by URL pattern
      *
      * @param string $pattern

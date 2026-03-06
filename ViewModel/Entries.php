@@ -16,7 +16,7 @@ use Magento\Framework\View\Element\Block\ArgumentInterface;
 use Qoliber\TridentCache\Model\Config;
 use Qoliber\TridentCache\Model\TridentClient;
 
-class Stats implements ArgumentInterface
+class Entries implements ArgumentInterface
 {
     public function __construct(
         private readonly TridentClient $tridentClient,
@@ -35,24 +35,38 @@ class Stats implements ArgumentInterface
     }
 
     /**
+     * @param int $offset
+     * @param int $limit
+     * @param string|null $tagFilter
+     * @param string $sort
      * @return array<string, mixed>|null
      */
-    public function getStats(): ?array
+    public function getEntries(int $offset = 0, int $limit = 50, ?string $tagFilter = null, string $sort = 'age'): ?array
     {
-        return $this->tridentClient->getStats();
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function getRules(): ?array
-    {
-        return $this->tridentClient->getRules();
+        return $this->tridentClient->getEntries($offset, $limit, $tagFilter, $sort);
     }
 
     public function getApiUrl(): string
     {
         return $this->config->getApiUrl();
+    }
+
+    /**
+     * Parse a url_key like "GET:https:example.com:/products/123" into components
+     *
+     * @param string $urlKey
+     * @return array{method: string, scheme: string, host: string, path: string}
+     */
+    public function parseUrlKey(string $urlKey): array
+    {
+        $parts = explode(':', $urlKey, 4);
+
+        return [
+            'method' => $parts[0] ?? 'GET',
+            'scheme' => $parts[1] ?? 'https',
+            'host' => $parts[2] ?? '',
+            'path' => $parts[3] ?? '/',
+        ];
     }
 
     public function formatBytes(int $bytes, int $precision = 2): string
@@ -69,32 +83,5 @@ class Stats implements ArgumentInterface
     public function formatNumber(int|float $number): string
     {
         return number_format($number, 0, '.', ',');
-    }
-
-    /**
-     * @param int $limit
-     * @return array<string, mixed>|null
-     */
-    public function getTopUrls(int $limit = 10): ?array
-    {
-        return $this->tridentClient->getTopUrls($limit);
-    }
-
-    public function isSoftPurgeEnabled(): bool
-    {
-        return $this->config->isSoftPurgeEnabled();
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function getTridentHealth(): ?array
-    {
-        return $this->tridentClient->getHealth();
-    }
-
-    public function formatPercentage(float $value): string
-    {
-        return number_format($value, 2) . '%';
     }
 }

@@ -199,10 +199,31 @@
 }
 
 .trident-status-title {
+    align-items: center;
     color: #303030;
+    display: flex;
     font-size: 16px;
     font-weight: 600;
+    gap: 8px;
     margin: 0 0 15px;
+}
+
+.trident-health-indicator {
+    font-size: 14px;
+
+    &.trident-health-ok {
+        color: @trident-success;
+    }
+
+    &.trident-health-error {
+        color: @trident-warning;
+    }
+}
+
+.trident-version-info {
+    color: #666;
+    font-size: 12px;
+    margin-bottom: 15px;
 }
 
 .trident-status-grid {
@@ -254,6 +275,197 @@
     }
 }
 
+// Entries & Tags Containers
+.trident-entries-container,
+.trident-tags-container {
+    padding: 20px;
+}
+
+// Filters Card
+.trident-card-filters {
+    border-left: 4px solid @trident-primary;
+    margin-bottom: 20px;
+}
+
+.trident-filter-form {
+    .trident-filter-row {
+        align-items: flex-end;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 15px;
+    }
+
+    .trident-filter-field {
+        flex: 1;
+        min-width: 200px;
+
+        label {
+            color: #303030;
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .admin__control-text,
+        .admin__control-select {
+            width: 100%;
+        }
+    }
+
+    .trident-filter-actions {
+        display: flex;
+        gap: 8px;
+        padding-bottom: 1px;
+    }
+}
+
+// Results Info
+.trident-results-info {
+    color: #666;
+    font-size: 13px;
+    margin-bottom: 15px;
+    padding: 0 5px;
+}
+
+// Table Wrapper
+.trident-table-wrapper {
+    overflow-x: auto;
+}
+
+// Entries & Tags Tables
+.trident-entries-table,
+.trident-tags-table,
+.trident-top-urls-table {
+    width: 100%;
+
+    th,
+    td {
+        padding: 10px 12px;
+        text-align: left;
+        vertical-align: middle;
+    }
+
+    th {
+        background: @trident-bg;
+        color: #303030;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    tr:hover td {
+        background: @trident-bg;
+    }
+
+    code {
+        background: #f0f0f0;
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 12px;
+        padding: 2px 6px;
+    }
+}
+
+.trident-col-right {
+    text-align: right !important;
+}
+
+.trident-col-url {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.trident-col-tags {
+    max-width: 250px;
+}
+
+.trident-col-actions {
+    display: flex;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+// Tag Badges
+.trident-tag-badge {
+    background: #e8f0fe;
+    border-radius: 3px;
+    color: @trident-info;
+    display: inline-block;
+    font-size: 11px;
+    margin: 1px 2px;
+    padding: 2px 8px;
+    text-decoration: none;
+    white-space: nowrap;
+
+    &:hover {
+        background: #d2e3fc;
+        text-decoration: none;
+    }
+}
+
+.trident-tag-more {
+    background: #f0f0f0;
+    color: #666;
+}
+
+.trident-tag-expand {
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+
+    &:hover {
+        background: #e0e0e0;
+        color: #333;
+    }
+}
+
+.trident-tag-name {
+    font-size: 13px;
+}
+
+// Method Badge
+.trident-method-badge {
+    background: @trident-success;
+    border-radius: 3px;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    text-transform: uppercase;
+}
+
+// Pagination
+.trident-pagination {
+    align-items: center;
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+    margin-top: 20px;
+    padding: 15px 0;
+}
+
+.trident-page-info {
+    color: #666;
+    font-size: 13px;
+}
+
+// Purged State
+.trident-purged {
+    background: @trident-success !important;
+    border-color: @trident-success !important;
+    color: #fff !important;
+    cursor: default;
+}
+
+// Top URLs card in stats page
+.trident-card-top-urls {
+    border-left: 4px solid @trident-primary;
+}
+
 // Responsive adjustments
 @media (max-width: 768px) {
     .trident-stats-grid,
@@ -277,5 +489,17 @@
     .trident-status-stat {
         min-width: auto;
         text-align: left;
+    }
+
+    .trident-filter-row {
+        flex-direction: column;
+    }
+
+    .trident-filter-field {
+        min-width: auto !important;
+    }
+
+    .trident-col-actions {
+        flex-direction: column;
     }
 }

@@ -46,6 +46,47 @@
                             <field id="*/*/caching_application">3</field>
                         </depends>
                     </field>
+                    <field id="ttl" type="text" translate="label comment" sortOrder="50" showInDefault="1">
+                        <label>Default TTL (seconds)</label>
+                        <comment>Public content default time-to-live in seconds. Default: 86400 (24 hours)</comment>
+                        <validate>validate-digits</validate>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
+                    <field id="grace_period" type="text" translate="label comment" sortOrder="60" showInDefault="1">
+                        <label>Grace Period (seconds)</label>
+                        <comment>Serve stale content for this duration after expiry while revalidating. Default: 86400 (24 hours)</comment>
+                        <validate>validate-digits</validate>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
+                    <field id="ttl_static" type="text" translate="label comment" sortOrder="70" showInDefault="1">
+                        <label>Static Assets TTL (seconds)</label>
+                        <comment>TTL for static assets (/static/, /media/). Default: 2592000 (30 days)</comment>
+                        <validate>validate-digits</validate>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
+                    <field id="esi_enabled" type="select" translate="label comment" sortOrder="80" showInDefault="1">
+                        <label>Enable ESI</label>
+                        <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                        <comment>Enable Edge Side Includes processing. Trident will process esi:include tags in responses.</comment>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
+                    <field id="esi_max_depth" type="text" translate="label comment" sortOrder="90" showInDefault="1">
+                        <label>ESI Max Nesting Depth</label>
+                        <comment>Maximum depth for nested ESI includes. Default: 3</comment>
+                        <validate>validate-digits</validate>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                            <field id="*/*/esi_enabled">1</field>
+                        </depends>
+                    </field>
                     <depends>
                         <field id="caching_application">3</field>
                     </depends>

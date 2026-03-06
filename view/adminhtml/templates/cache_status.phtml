@@ -23,11 +23,30 @@ if (!$viewModel->isTridentConfigured()) {
 }
 
 $stats = $viewModel->isEnabled() ? $viewModel->getStats() : null;
+$health = $viewModel->isEnabled() ? $viewModel->getTridentHealth() : null;
 $mode = $viewModel->isSoftPurgeEnabled() ? __('Soft Purge') : __('Hard Purge');
+$isHealthy = $health !== null && ($health['status'] ?? '') === 'ok';
 ?>
 
 <div class="trident-cache-status">
-    <h2 class="trident-status-title"><?= $escaper->escapeHtml(__('Trident Cache')) ?></h2>
+    <h2 class="trident-status-title">
+        <?= $escaper->escapeHtml(__('Trident Cache')) ?>
+        <?php if ($health !== null): ?>
+            <span class="trident-health-indicator trident-health-<?= $isHealthy ? 'ok' : 'error' ?>"
+                  title="<?= $escaper->escapeHtmlAttr($isHealthy ? __('Connected') : __('Degraded')) ?>">
+                &#x25CF;
+            </span>
+        <?php endif; ?>
+    </h2>
+
+    <?php if ($health !== null && isset($health['version'])): ?>
+        <div class="trident-version-info">
+            <?= $escaper->escapeHtml(__('Trident v%1', $health['version'])) ?>
+            <?php if (isset($health['uptime'])): ?>
+                &mdash; <?= $escaper->escapeHtml(__('Uptime: %1', $health['uptime'])) ?>
+            <?php endif; ?>
+        </div>
+    <?php endif; ?>
 
     <?php if ($stats === null): ?>
         <div class="message message-warning">

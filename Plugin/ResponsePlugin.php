@@ -23,11 +23,11 @@ class ResponsePlugin
     }
 
     /**
-     * Before sendResponse - ensure X-Magento-Tags is present for Trident
+     * Before sendResponse - set cache headers for Trident
      *
      * Magento generates proper cache tags in X-Magento-Tags header natively.
      * Trident reads X-Magento-Tags directly - no conversion needed.
-     * We strip the header after Trident captures it to avoid exposing tags to clients.
+     * We set s-maxage from admin config and add stale-while-revalidate from grace period.
      */
     public function beforeSendResponse(HttpResponse $response): void
     {
@@ -50,11 +50,28 @@ class ResponsePlugin
             return;
         }
 
-        // Ensure s-maxage is set if only max-age is present
-        if (!str_contains($cacheControlValue, 's-maxage') && preg_match('/max-age=(\d+)/', $cacheControlValue, $matches)) {
+        // Set s-maxage from admin config TTL if not already present
+        if (!str_contains($cacheControlValue, 's-maxage')) {
+            $ttl = $this->config->getTtl();
+            $cacheControlValue .= ', s-maxage=' . $ttl;
+        }
+
+        // Add stale-while-revalidate from grace period config
+        if (!str_contains($cacheControlValue, 'stale-while-revalidate')) {
+            $gracePeriod = $this->config->getGracePeriod();
+            if ($gracePeriod > 0) {
+                $cacheControlValue .= ', stale-while-revalidate=' . $gracePeriod;
+            }
+        }
+
+        $response->setHeader('Cache-Control', $cacheControlValue, true);
+
+        // Set Surrogate-Control header for ESI processing
+        if ($this->config->isEsiEnabled()) {
+            $maxDepth = $this->config->getEsiMaxDepth();
             $response->setHeader(
-                'Cache-Control',
-                $cacheControlValue . ', s-maxage=' . $matches[1],
+                'Surrogate-Control',
+                'content="ESI/1.0", max-depth=' . $maxDepth,
                 true
             );
         }

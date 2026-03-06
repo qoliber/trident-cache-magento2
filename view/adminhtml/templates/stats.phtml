@@ -138,6 +138,44 @@ $viewModel = $block->getData('view_model');
                 <?php endif; ?>
             </div>
 
+            <?php $topUrls = $viewModel->getTopUrls(); ?>
+            <?php if ($topUrls !== null && !empty($topUrls['entries'] ?? [])): ?>
+                <div class="trident-card trident-card-top-urls" style="grid-column: 1 / -1;">
+                    <h3 class="trident-card-title"><?= $escaper->escapeHtml(__('Top URLs by Requests')) ?></h3>
+                    <div class="trident-table-wrapper">
+                        <table class="admin__table-primary trident-top-urls-table">
+                            <thead>
+                                <tr>
+                                    <th><?= $escaper->escapeHtml(__('Path')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Requests')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Hits')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Hit Ratio')) ?></th>
+                                    <th class="trident-col-right"><?= $escaper->escapeHtml(__('Size')) ?></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach (array_slice($topUrls['entries'], 0, 10) as $entry): ?>
+                                    <?php
+                                    $path = $entry['path'] ?? $entry['url'] ?? '';
+                                    $requests = (int)($entry['requests'] ?? 0);
+                                    $hits = (int)($entry['hits'] ?? 0);
+                                    $ratio = $requests > 0 ? ($hits / $requests) * 100 : 0;
+                                    $size = (int)($entry['size'] ?? 0);
+                                    ?>
+                                    <tr>
+                                        <td class="trident-col-url"><code><?= $escaper->escapeHtml($path) ?></code></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber($requests)) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber($hits)) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatPercentage($ratio)) ?></td>
+                                        <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatBytes($size)) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <div class="trident-api-info">
                 <p><strong><?= $escaper->escapeHtml(__('API Endpoint:')) ?></strong> <?= $escaper->escapeHtml($viewModel->getApiUrl()) ?></p>
             </div>

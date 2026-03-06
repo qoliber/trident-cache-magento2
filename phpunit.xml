@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
+         bootstrap="../../../vendor/autoload.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache">
+    <testsuites>
+        <testsuite name="Qoliber_TridentCache Integration Tests">
+            <directory>Test/Integration</directory>
+        </testsuite>
+        <testsuite name="Qoliber_TridentCache Unit Tests">
+            <directory>Test/Unit</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>Model</directory>
+            <directory>Plugin</directory>
+            <directory>Observer</directory>
+            <directory>ViewModel</directory>
+        </include>
+    </source>
+</phpunit>

@@ -15,9 +15,14 @@
             <full_page_cache>
                 <trident>
                     <api_url>http://trident:9301</api_url>
-                    <api_token></api_token>
+                    <api_token/>
                     <soft_purge>1</soft_purge>
                     <debug>0</debug>
+                    <ttl>86400</ttl>
+                    <grace_period>86400</grace_period>
+                    <ttl_static>2592000</ttl_static>
+                    <esi_enabled>0</esi_enabled>
+                    <esi_max_depth>3</esi_max_depth>
                 </trident>
             </full_page_cache>
         </system>

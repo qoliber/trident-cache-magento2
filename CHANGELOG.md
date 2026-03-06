@@ -5,6 +5,37 @@ All notable changes to Qoliber_TridentCache will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-06
+
+### Added
+
+- **Cached Pages admin page** — Paginated grid of all cached URLs with host, method, size, TTL, age, hits, and tags. Accessible via System > Trident Cache > Cached Pages.
+- **Cache Tags admin page** — Paginated list of all cache tags with entry counts. Accessible via System > Trident Cache > Cache Tags.
+- **Tag filtering on entries** — Filter cached entries by tag via the entries page filter form.
+- **Tag prefix filtering** — Filter cache tags by name prefix on the tags page.
+- **Per-entry purge** — AJAX purge button on each cache entry row for targeted invalidation.
+- **Per-tag purge** — AJAX purge button on each tag row to purge all entries with that tag.
+- **Clickable tag badges** — Tag badges on entries link to entries filtered by that tag.
+- **"View Entries" on tags** — Link from each tag to the entries page filtered by that tag.
+- **Top URLs on stats page** — Top 10 URLs by request count table on the Cache Statistics page.
+- **Sorting** — Sort entries by age, size, hits, or TTL. Sort tags by count or name.
+- **TridentClient API methods** — Added `getEntries()`, `getTags()`, `getTopUrls()`, `purgeUrl()`.
+
+## [1.1.0] - 2026-03-01
+
+### Added
+
+- **Configurable TTL, grace period, and static asset TTL** via admin system configuration.
+- **ESI (Edge Side Includes) support** — Enable ESI processing with configurable max nesting depth. Adds `Surrogate-Control` header when enabled.
+- **ConfigTypePlugin** — Maps Trident cache type (3) to Varnish (2) so core Magento FPC plugins activate without patching core code.
+- **Health indicator on Cache Management page** — Green/orange status dot with Trident version and uptime display.
+- **Unit and integration test suite** — PHPUnit 10.5 tests for TridentClient, Config, all plugins, observers, and PurgeStrategy.
+
+### Changed
+
+- **ResponsePlugin rewritten** — Now uses admin-configured TTL for `s-maxage` and grace period for `stale-while-revalidate` instead of copying `max-age`.
+- **Config.php** — Removed `PageCacheConfig` dependency, reads caching application type directly from `ScopeConfig`.
+
 ## [1.0.1] - 2026-02-15
 
 ### Fixed
