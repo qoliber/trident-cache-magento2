@@ -121,6 +121,8 @@ $offset = ($page - 1) * $limit;
                             <?php foreach ($entries as $entry): ?>
                                 <?php
                                 $urlKey = $entry['url_key'] ?? '';
+                                $storageKey = $entry['storage_key'] ?? md5($urlKey);
+                                $shortKey = substr($storageKey, 0, 8);
                                 $parsed = $viewModel->parseUrlKey($urlKey);
                                 $entryTags = $entry['tags'] ?? [];
                                 sort($entryTags);
@@ -129,9 +131,25 @@ $offset = ($page - 1) * $limit;
                                 $age = (int)($entry['age'] ?? 0);
                                 $hits = (int)($entry['hits'] ?? 0);
                                 ?>
-                                <tr id="entry-<?= $escaper->escapeHtmlAttr(md5($urlKey)) ?>">
+                                <?php $varyValues = $entry['vary'] ?? []; ?>
+                                <tr id="entry-<?= $escaper->escapeHtmlAttr($storageKey) ?>">
                                     <td class="trident-col-url" title="<?= $escaper->escapeHtmlAttr($parsed['path']) ?>">
                                         <code><?= $escaper->escapeHtml($parsed['path']) ?></code>
+                                        <span class="trident-key-badge" title="<?= $escaper->escapeHtmlAttr(__('Cache key: %1', $storageKey)) ?>"><?= $escaper->escapeHtml($shortKey) ?></span>
+                                        <?php if (!empty($varyValues)): ?>
+                                            <div class="trident-vary-info">
+                                                <?php foreach ($varyValues as $vary): ?>
+                                                    <?php
+                                                    $varyName = $vary[0] ?? '';
+                                                    $varyVal = $vary[1] ?? '';
+                                                    $shortVal = strlen($varyVal) > 12 ? substr($varyVal, 0, 12) . '…' : $varyVal;
+                                                    ?>
+                                                    <span class="trident-vary-badge" title="<?= $escaper->escapeHtmlAttr($varyName . '=' . $varyVal) ?>">
+                                                        <?= $escaper->escapeHtml($varyName) ?>=<?= $escaper->escapeHtml($shortVal) ?>
+                                                    </span>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                     <td><?= $escaper->escapeHtml($parsed['host']) ?></td>
                                     <td><span class="trident-method-badge"><?= $escaper->escapeHtml($parsed['method']) ?></span></td>
@@ -140,7 +158,7 @@ $offset = ($page - 1) * $limit;
                                     <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber($age)) ?>s</td>
                                     <td class="trident-col-right"><?= $escaper->escapeHtml($viewModel->formatNumber($hits)) ?></td>
                                     <td class="trident-col-tags">
-                                        <?php $tagId = 'tags-' . md5($urlKey); ?>
+                                        <?php $tagId = 'tags-' . $storageKey; ?>
                                         <?php foreach (array_slice($entryTags, 0, 5) as $tag): ?>
                                             <a href="<?= $escaper->escapeUrl($block->getUrl('trident/cache/entries', ['tag_filter' => $tag])) ?>"
                                                class="trident-tag-badge"
@@ -171,7 +189,7 @@ $offset = ($page - 1) * $limit;
                                                 class="action-default scalable trident-purge-btn"
                                                 data-url="<?= $escaper->escapeHtmlAttr($parsed['scheme'] . '://' . $parsed['host'] . $parsed['path']) ?>"
                                                 data-host="<?= $escaper->escapeHtmlAttr($parsed['host']) ?>"
-                                                data-row="entry-<?= $escaper->escapeHtmlAttr(md5($urlKey)) ?>">
+                                                data-row="entry-<?= $escaper->escapeHtmlAttr($storageKey) ?>">
                                             <span><?= $escaper->escapeHtml(__('Purge')) ?></span>
                                         </button>
                                     </td>
