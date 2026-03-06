@@ -5,7 +5,7 @@ All notable changes to Qoliber_TridentCache will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0] - 2026-03-06
+## [1.1.0] - 2026-03-06
 
 ### Added
 
@@ -20,16 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Top URLs on stats page** — Top 10 URLs by request count table on the Cache Statistics page.
 - **Sorting** — Sort entries by age, size, hits, or TTL. Sort tags by count or name.
 - **TridentClient API methods** — Added `getEntries()`, `getTags()`, `getTopUrls()`, `purgeUrl()`.
-
-## [1.1.0] - 2026-03-01
-
-### Added
-
 - **Configurable TTL, grace period, and static asset TTL** via admin system configuration.
 - **ESI (Edge Side Includes) support** — Enable ESI processing with configurable max nesting depth. Adds `Surrogate-Control` header when enabled.
 - **ConfigTypePlugin** — Maps Trident cache type (3) to Varnish (2) so core Magento FPC plugins activate without patching core code.
 - **Health indicator on Cache Management page** — Green/orange status dot with Trident version and uptime display.
 - **Unit and integration test suite** — PHPUnit 10.5 tests for TridentClient, Config, all plugins, observers, and PurgeStrategy.
+- **Vary dimension badges** — Cache entries with the same URL but different vary values (e.g. customer groups) now show distinguishing badges.
 
 ### Changed
 
