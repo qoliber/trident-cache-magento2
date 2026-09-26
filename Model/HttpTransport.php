@@ -37,6 +37,16 @@ class HttpTransport implements Transport
     private ?Transport $transport = null;
 
     /**
+     * @param float $timeout Total request timeout, seconds.
+     * @param float $connectTimeout Connection timeout, seconds.
+     */
+    public function __construct(
+        private readonly float $timeout = self::REQUEST_TIMEOUT,
+        private readonly float $connectTimeout = self::CONNECT_TIMEOUT
+    ) {
+    }
+
+    /**
      * Never throws: anything that prevents a response — including what is not
      * a PSR-18 exception (a malformed URL typed in the admin) — is reported as
      * no response (status 0), which the delivery code retries and the admin
@@ -55,20 +65,55 @@ class HttpTransport implements Transport
     }
 
     /**
+     * The Guzzle options of this transport (timeouts and proxy).
+     *
+     * @return array<string, mixed>
+     */
+    public function options(): array
+    {
+        return [
+            'timeout' => $this->timeout,
+            'connect_timeout' => $this->connectTimeout,
+            'proxy' => self::proxy(),
+        ];
+    }
+
+    /**
+     * The proxy the module's requests may use: the lowercase `http_proxy`,
+     * `https_proxy` and `no_proxy` environment variables — what libcurl reads
+     * and what the module honoured before, through Magento's Curl client.
+     *
+     * Always set explicitly: left alone, Guzzle takes UPPERCASE `HTTP_PROXY`
+     * in the CLI and `HTTPS_PROXY` everywhere. Under CGI/FPM an uppercase
+     * variable can come from a request's `Proxy:` header ("httpoxy"), and the
+     * admin token must never go through a proxy nobody configured for it.
+     *
+     * @return array{http?: string, https?: string, no?: list<string>}
+     */
+    public static function proxy(): array
+    {
+        $proxy = [];
+        foreach (['http' => 'http_proxy', 'https' => 'https_proxy'] as $scheme => $variable) {
+            $value = trim((string) getenv($variable));
+            if ($value !== '') {
+                $proxy[$scheme] = $value;
+            }
+        }
+        $noProxy = trim((string) getenv('no_proxy'));
+        if ($noProxy !== '') {
+            $proxy['no'] = array_values(array_filter(array_map('trim', explode(',', $noProxy)), 'strlen'));
+        }
+        return $proxy;
+    }
+
+    /**
      * @return Transport
      */
     private function transport(): Transport
     {
         if ($this->transport === null) {
             $factory = new HttpFactory();
-            $this->transport = new Psr18Transport(
-                new Client([
-                    'timeout' => self::REQUEST_TIMEOUT,
-                    'connect_timeout' => self::CONNECT_TIMEOUT,
-                ]),
-                $factory,
-                $factory
-            );
+            $this->transport = new Psr18Transport(new Client($this->options()), $factory, $factory);
         }
         return $this->transport;
     }

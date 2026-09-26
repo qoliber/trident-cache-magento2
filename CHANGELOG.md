@@ -13,10 +13,36 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 <!-- At tag time: replace "unreleased" with the release date, tag v1.8.0 at
      that commit, and point the engine submodule at it (F15). -->
 
+### Upgrading from 1.5.x
+
+Run `bin/magento setup:upgrade` (the outbox table from X02) and
+`bin/magento setup:di:compile` in production mode. Code that extends or
+constructs the module's classes directly (rather than through Magento's
+object manager) must follow these changes to public API released in 1.5.2:
+
+- `Model\TridentClient::__construct()` takes
+  `(Qoliber\Trident\Delivery\Transport $transport, LoggerInterface $logger, Config $config, ?InstanceSelection $selection = null)`
+  — it was `(Curl $curl, LoggerInterface $logger, Config $config)`. Every
+  public method of 1.5.2 keeps its signature and return type.
+- `Model\TridentClient::instances()` (new since 1.5.2) returns
+  `list<Qoliber\Trident\Delivery\Instance>`.
+- `Model\PurgeAfterCommit::__construct()` takes
+  `(ResourceConnection, PurgeOutboxInterface, Config, TridentClient, LoggerInterface, Clock)`.
+- `Cron\DrainPurgeOutbox`, `Console\Command\PurgeDrainCommand` and
+  `Console\Command\PurgeStatusCommand` take an extra `Model\Clock`.
+  The cron job id (`qoliber_trident_purge_outbox_drain`) and the commands
+  (`trident:purge:drain`, `trident:purge:status`) are unchanged.
+- `Model\Outbox\PurgeOutboxInterface` now extends the library's
+  `OutboxStore`. It, `Model\Outbox\OutboxEntry` and `Model\Instance` are
+  new in this release (X02/X03, never shipped); `OutboxEntry` and `Instance`
+  are replaced by the library's classes of the same name.
+- Magento 2.4.7 and PHP 8.1 are no longer allowed by `composer.json`
+  (untested); stores on them stay on 1.5.2.
+
 ### Changed — built on qoliber/trident-php
 
 The module now requires [`qoliber/trident-php`](https://packagist.org/packages/qoliber/trident-php)
-`^1.4`, the library every Trident platform integration shares, instead of
+`^1.4.1`, the library every Trident platform integration shares, instead of
 carrying its own copy of the same code:
 
 - **Durable purge delivery** is the library's: the outbox implements its
@@ -27,42 +53,83 @@ carrying its own copy of the same code:
   Magento's own: recording inside the save's transaction, sending from the
   commit callback, holding config purges until the configuration reloads,
   queued full clears, and splitting rows written before X03.
-- **Every admin API request** goes through the library's `Api` (bearer token,
-  JSON, one retry when the admin limiter answers 429 with a wait) over
-  Magento's Guzzle, instead of Magento's `Curl` client.
+- **The admin API**: reads and actions the library returns raw go through its
+  typed client, invalidations on several instances through its `Fleet`, and
+  every other request through its `Api` (bearer token, JSON, one retry when
+  the admin limiter answers 429, and — since 1.4.1 — a redirect or a non-JSON
+  answer is an error, not data), over Magento's Guzzle instead of `Curl`.
 - **Instances** are parsed by the library's `Instances::parse()`, the rules
-  every integration uses: a name is 1-64 characters of `A-Z a-z 0-9 . _ -`,
-  and `api_url` must be an http(s) URL. Entries that break a rule are skipped
-  and reported (`trident:purge:status`, the configuration screen), as before.
+  every integration uses. An instance name in `app/etc/env.php` must be
+  **1-64 characters of `A-Z a-z 0-9 . _ -`** (it is stored with each pending
+  purge and compared case-sensitively), and `api_url` must be an http(s) URL
+  (one without a scheme, `trident:9301`, is read as http, as before). An entry
+  that breaks a rule is **skipped and reported** — by
+  `bin/magento trident:purge:status` (which then exits 1) and on the
+  configuration screen — while the valid ones are used.
 - `composer.json` requires real version ranges — Magento 2.4.8 to 2.4.9
-  (`magento/framework ~103.0.8` …), PHP 8.2 to 8.5 — instead of `*`. The
-  footprint is `qoliber/trident-php` plus two PSR interface packages
-  (`psr/http-server-handler`, `psr/http-server-middleware`); Guzzle and the
-  other PSR packages already ship with Magento.
+  (`magento/framework ~103.0.8` …, now also `magento/module-backend` and
+  `magento/module-config`, which the module uses), PHP 8.2 to 8.5 — instead
+  of `*`, and `guzzlehttp/guzzle ^7.5` with `guzzlehttp/psr7 ^2.4` (its PSR-17
+  factories). New packages on a Magento install: `qoliber/trident-php`,
+  `psr/http-server-handler`, `psr/http-server-middleware`.
+- **Proxy**: requests honour the lowercase `http_proxy`, `https_proxy` and
+  `no_proxy` variables, like the libcurl path before — never the uppercase
+  `HTTP_PROXY` Guzzle would read (under CGI a request's `Proxy:` header can
+  set it, "httpoxy"), so the admin token cannot be routed through a proxy
+  nobody configured.
 
 ### Added — the Trident screens show every instance (X03)
 
 - **An instance switcher** on every Trident screen (when there are several):
   statistics, entries, the warmer, launch, reflect, bans, backends, discovery
   and live events read and act on the instance chosen there, kept in the
-  admin session. Purges still go to every instance.
-- **An overview of all instances** on Statistics and on Cache Management:
-  reachable or not (and why), version, licence, entries, hit rate and the
-  purges pending for each. One instance being down never blanks the others.
+  admin session. Purges still go to every instance, and choosing an instance
+  without an API token never switches purges off.
+- **An overview of all instances** on Statistics and on Cache Management,
+  when there are several: reachable or not (and why), version, licence,
+  entries, hit rate and the purges pending for each. It reads with short
+  timeouts (2 s), and one instance being down never blanks the others.
 
 ### Fixed
 
 - **An error answer was shown as success.** The client returned the decoded
-  body of a 4xx/5xx answer, and every action treats "not null" as done — so a
-  disabled warmer's `{"code":"WARMER_DISABLED"}` read "Warmer started". An
-  error is now reported as a failure, with the engine's reason in the log.
+  body of a 4xx/5xx answer (and of a redirect or a proxy's HTML page), and
+  every action treats "not null" as done — so a disabled warmer's
+  `{"code":"WARMER_DISABLED"}` read "Warmer started". Such an answer is now a
+  failure, with the reason in the log.
 - **Live Events showed nothing.** The engine keeps an event stream open for as
   long as the client listens; Magento's `Curl` threw away what had arrived
-  when its 2-second timeout fired and reported "Operation timed out". A poll
-  now keeps the events received within the window — from the selected
-  instance.
-- **A POST without data sent `[]`**, which the engine's request parsers refuse
-  (warmer cancel, launch complete, denoiser resets); it now sends `{}`.
+  when its 2-second timeout fired. A poll now listens for its window and keeps
+  what arrived — with or without `allow_url_fopen` (without it, the curl
+  handler cannot stream, so the poll ends on an overall timeout and reads what
+  was received) — from the selected instance.
+- **"Warm these URLs" warmed the configured sources instead.** The URL list
+  was sent to `/admin/warmer/run`, which takes no body; it now goes to the
+  warmer's queue.
+- **A POST without data sent `[]`**, which the engine's request parsers refuse;
+  it now sends `{}` or no body.
+
+### Known — library gaps (qoliber/trident-php 1.4.1)
+
+The module still names these endpoints itself (through the library's `Api`),
+because the library cannot yet do what the screens need:
+
+- The typed client's answers for stats, health, rules, top URLs, entries,
+  tags, backends, connections, bans, discovery, latency/error/protection
+  statistics, memory, the refresh queue and launch actions are normalised
+  objects whose `toArray()` drops fields the screens show
+  (`CacheStatsResponse::toArray()` has no `hits`, `misses` or `hit_ratio`),
+  and none exposes the raw answer.
+- `purgeTags()` cannot send `exclude_tags`, `purgeTags()`, `purgeTagPattern()`
+  and `purgeAll()` cannot send the purge `mode` (so the engine's default
+  applies), and `purgeAll()` reads a clear's answer as a `PurgeResponse`.
+  `PurgeClient` has no full clear, and its `PurgeAttempt` carries no answer
+  (the counts the purge screens show).
+- `explain()` can send only the `host` header; the WAF export has no method.
+- Denoiser pins (not a library gap): the engine and the library's
+  `denoiserQueryPin()`/`denoiserPathPin()` require `class` (query) or `status`
+  (path), which this module's forms do not collect yet, so pinning fails
+  until they do; the module's two pin methods stay on `Api` until then.
 
 ### Fixed — a purge deferred by Reflect mode was retried as a failure
 

@@ -21,9 +21,11 @@ use Qoliber\Trident\Delivery\Instance;
  * screen: read what arrives within a short window, then hang up.
  *
  * The engine keeps these streams open for as long as the client listens, so a
- * poll always ends on the deadline. What arrived before it is the answer —
- * Magento's Curl client threw it away with the timeout error, which is why the
- * screen used to show nothing but "Operation timed out".
+ * poll always ends on a deadline, and what arrived before it is the answer.
+ * Guzzle streams the body only through its stream handler (allow_url_fopen);
+ * its curl handler buffers until the transfer ends — never, for this stream —
+ * so the request also carries an overall `timeout`, and a `sink` from which
+ * what curl received is read back when that timeout ends the transfer.
  */
 class EventPoller
 {
@@ -39,35 +41,70 @@ class EventPoller
     public function poll(Instance $instance, string $stream, float $seconds): array
     {
         $deadline = microtime(true) + $seconds;
+        $sink = fopen('php://temp', 'w+');
         try {
-            $response = (new Client([
-                'connect_timeout' => min($seconds, HttpTransport::CONNECT_TIMEOUT),
-                'read_timeout' => self::READ_SLICE,
-                'http_errors' => false,
-                'allow_redirects' => false,
-            ]))->request('GET', $instance->apiUrl . '/admin/events/' . rawurlencode($stream), [
-                'headers' => Api::headers($instance, false) + ['Accept' => 'text/event-stream'],
-                'stream' => true,
-            ]);
+            $response = (new Client())->request(
+                'GET',
+                $instance->apiUrl . '/admin/events/' . rawurlencode($stream),
+                $this->options($instance, $seconds) + ['sink' => $sink]
+            );
         } catch (\Throwable $e) {
-            return ['events' => [], 'error' => $e->getMessage()];
+            // The curl handler's timeout: what arrived is in the sink.
+            $received = $this->drain($sink);
+            return $received !== ''
+                ? ['events' => $this->parse($received), 'error' => null]
+                : ['events' => [], 'error' => $e->getMessage()];
         }
         if ($response->getStatusCode() !== 200) {
+            $this->drain($sink);
             return ['events' => [], 'error' => sprintf('HTTP %d', $response->getStatusCode())];
         }
 
         $body = $response->getBody();
         $buffer = '';
-        while (microtime(true) < $deadline && !$body->eof()) {
+        // Until the deadline: a quiet stream times out every read slice, which
+        // PHP reports as end-of-file and Guzzle as a failed read — neither is
+        // the end of the stream. Only a read that failed WITHOUT timing out is.
+        while (microtime(true) < $deadline) {
             try {
                 $buffer .= $body->read(8192);
             } catch (\Throwable $e) {
+                if ($body->getMetadata('timed_out') !== true) {
+                    break;
+                }
+                continue;
+            }
+            if ($body->eof() && $body->getMetadata('timed_out') !== true) {
                 break;
             }
         }
         $body->close();
+        $this->drain($sink);
 
         return ['events' => $this->parse($buffer), 'error' => null];
+    }
+
+    /**
+     * The request options of one poll.
+     *
+     * @param Instance $instance
+     * @param float $seconds
+     * @return array<string, mixed>
+     */
+    public function options(Instance $instance, float $seconds): array
+    {
+        return [
+            // The whole transfer: the only bound the curl handler has.
+            'timeout' => $seconds + 1,
+            'connect_timeout' => min($seconds, HttpTransport::CONNECT_TIMEOUT),
+            'read_timeout' => self::READ_SLICE,
+            'http_errors' => false,
+            'allow_redirects' => false,
+            'proxy' => HttpTransport::proxy(),
+            // The stream's own Accept replaces the library's JSON one.
+            'headers' => array_merge(Api::headers($instance, false), ['Accept' => 'text/event-stream']),
+            'stream' => true,
+        ];
     }
 
     /**
@@ -96,5 +133,22 @@ class EventPoller
             $events[] = is_array($decoded) ? $decoded : $payload;
         }
         return $events;
+    }
+
+    /**
+     * Read and close the sink.
+     *
+     * @param resource|false $sink
+     * @return string
+     */
+    private function drain($sink): string
+    {
+        if (!is_resource($sink)) {
+            return '';
+        }
+        rewind($sink);
+        $received = (string) stream_get_contents($sink);
+        fclose($sink);
+        return $received;
     }
 }

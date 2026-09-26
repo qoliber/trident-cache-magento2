@@ -15,16 +15,12 @@ namespace Qoliber\TridentCache\Model;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\Model\CallbackPool;
 use Psr\Log\LoggerInterface;
-use Qoliber\Trident\Admin\Api;
-use Qoliber\Trident\Delivery\Acknowledgement;
 use Qoliber\Trident\Delivery\Drainer;
 use Qoliber\Trident\Delivery\Instance;
 use Qoliber\Trident\Delivery\OutboxEntry;
 use Qoliber\Trident\Delivery\Packer;
-use Qoliber\Trident\Delivery\PurgeAttempt;
 use Qoliber\Trident\Delivery\PurgeClient;
 use Qoliber\Trident\Delivery\Purger;
-use Qoliber\Trident\Delivery\Transport;
 use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
 
 /**
@@ -54,7 +50,7 @@ use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
  * ({@see PurgeOutboxInterface}) through the same connection, so inside a
  * transaction the record commits or rolls back with the data. Delivery is
  * qoliber/trident-php's {@see Drainer}: requests of at most 1000 tags, each
- * row removed only when Trident acknowledges it ({@see Acknowledgement}: a
+ * row removed only when Trident acknowledges it (the library's Acknowledgement: a
  * 200 with the engine's purge schema, or Reflect mode's 202 `recorded`), a
  * backoff per row, and an instance left for the next drain after three
  * consecutive failures. A 401, 429, 5xx, timeout or dead process leaves the
@@ -116,7 +112,7 @@ class PurgeAfterCommit
      * @param ResourceConnection $resourceConnection
      * @param PurgeOutboxInterface $outbox
      * @param Config $config
-     * @param Transport $transport
+     * @param TridentClient $tridentClient
      * @param LoggerInterface $logger
      * @param Clock $clock
      */
@@ -124,7 +120,7 @@ class PurgeAfterCommit
         private readonly ResourceConnection $resourceConnection,
         private readonly PurgeOutboxInterface $outbox,
         private readonly Config $config,
-        private readonly Transport $transport,
+        private readonly TridentClient $tridentClient,
         private readonly LoggerInterface $logger,
         private readonly Clock $clock
     ) {
@@ -327,7 +323,7 @@ class PurgeAfterCommit
                 $tags,
                 fn (OutboxEntry $e): bool => $e->instance === $name && $e->id <= $last
             ));
-            $attempt = $this->clear($instances[$name]);
+            $attempt = $this->tridentClient->clear($instances[$name]);
             if ($attempt->acknowledged()) {
                 $ids = array_map(fn (OutboxEntry $e): int => $e->id, [...$owed, ...$covered]);
                 $this->outbox->remove($ids);
@@ -349,8 +345,8 @@ class PurgeAfterCommit
         $report = (new Drainer(
             $this->outbox,
             array_values($instances),
-            fn (Instance $instance): PurgeClient => new PurgeClient($instance, $this->transport),
-            $this->mode()
+            fn (Instance $instance): PurgeClient => $this->tridentClient->purgeClient($instance),
+            $this->config->getPurgeMode()
         ))->deliverEntries($tags, $now);
         foreach ($report->instances as $name => $result) {
             if ($result['error'] !== null) {
@@ -359,36 +355,6 @@ class PurgeAfterCommit
         }
 
         return $removed + $report->delivered;
-    }
-
-    /**
-     * POST /admin/cache/clear on one instance, judged by the library's
-     * {@see Acknowledgement::clearFailure()}.
-     *
-     * @param Instance $instance
-     * @return PurgeAttempt
-     */
-    private function clear(Instance $instance): PurgeAttempt
-    {
-        $response = $this->transport->request(
-            'POST',
-            $instance->apiUrl . '/admin/cache/clear',
-            Api::headers($instance),
-            (string) json_encode(['confirm' => true])
-        );
-        if ($response['status'] === 0) {
-            $error = (string) ($response['error'] ?? '');
-            return new PurgeAttempt('no response' . ($error !== '' ? ' — ' . $error : ''), true);
-        }
-        return new PurgeAttempt(Acknowledgement::clearFailure($response['status'], $response['body']));
-    }
-
-    /**
-     * @return string soft|hard
-     */
-    private function mode(): string
-    {
-        return $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard';
     }
 
     /**
@@ -426,9 +392,9 @@ class PurgeAfterCommit
     private function sendDirect(array $tags): void
     {
         foreach ($this->config->getInstances() as $instance) {
-            $client = new PurgeClient($instance, $this->transport);
+            $client = $this->tridentClient->purgeClient($instance);
             foreach (Packer::chunk($tags) as $chunk) {
-                $attempt = $client->purgeTags($chunk, $this->mode());
+                $attempt = $client->purgeTags($chunk, $this->config->getPurgeMode());
                 if (!$attempt->acknowledged()) {
                     $this->notAcknowledged($instance->name, 'purge_tags', (string) $attempt->failure);
                 }
@@ -444,7 +410,7 @@ class PurgeAfterCommit
     private function clearDirect(): void
     {
         foreach ($this->config->getInstances() as $instance) {
-            $attempt = $this->clear($instance);
+            $attempt = $this->tridentClient->clear($instance);
             if (!$attempt->acknowledged()) {
                 $this->notAcknowledged($instance->name, 'cache_clear', (string) $attempt->failure);
             }

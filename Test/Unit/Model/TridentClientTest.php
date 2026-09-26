@@ -46,6 +46,7 @@ class TridentClientTest extends TestCase
         $config->method('isTridentEnabled')->willReturnCallback(fn (): bool => $this->enabled);
         $config->method('getInstances')->willReturnCallback(fn (): array => $this->instances);
         $config->method('isSoftPurgeEnabled')->willReturnCallback(fn (): bool => $this->soft);
+        $config->method('getPurgeMode')->willReturnCallback(fn (): string => $this->soft ? 'soft' : 'hard');
         $selection = $this->createMock(InstanceSelection::class);
         $selection->method('selected')->willReturnCallback(fn (): ?string => $this->selected);
 
@@ -108,7 +109,7 @@ class TridentClientTest extends TestCase
         $this->http->answer('edge-1', $status, $body);
         $client = $this->client();
 
-        $this->assertFalse($client->deliverTags(['cat_p_1']));
+        $this->assertNull($client->purgeTags(['cat_p_1']));
         $this->assertStringStartsWith('purge_tags: HTTP ' . $status, (string) $client->lastFailure());
     }
 
@@ -131,7 +132,7 @@ class TridentClientTest extends TestCase
     {
         $this->http->answer('edge-1', 200, '{"purged":0,"mode":"soft","queued_refresh":0}');
 
-        $this->assertTrue($this->client()->deliverTags(['cat_p_1']));
+        $this->assertNotNull($this->client()->purgeTags(['cat_p_1']));
     }
 
     /**
@@ -142,7 +143,7 @@ class TridentClientTest extends TestCase
     {
         $this->http->answer('edge-1', 202, '{"status":"deferred","state":"recorded","queued_purges":4}');
 
-        $this->assertTrue($this->client()->deliverTags(['cat_p_1']));
+        $this->assertNotNull($this->client()->purgeTags(['cat_p_1']));
     }
 
     /**
@@ -162,7 +163,7 @@ class TridentClientTest extends TestCase
     {
         $this->http->answer('edge-1', $status, $body);
 
-        $this->assertFalse($this->client()->deliverTags(['cat_p_1']));
+        $this->assertNull($this->client()->purgeTags(['cat_p_1']));
     }
 
     public function testATransportFailureIsNotDelivered(): void
@@ -170,7 +171,7 @@ class TridentClientTest extends TestCase
         $this->http->down('edge-1');
         $client = $this->client();
 
-        $this->assertFalse($client->deliverTags(['cat_p_1']));
+        $this->assertNull($client->purgeTags(['cat_p_1']));
         $this->assertStringStartsWith('purge_tags: no response', (string) $client->lastFailure());
     }
 
@@ -178,14 +179,14 @@ class TridentClientTest extends TestCase
     {
         $this->http->answer('edge-1', 200, '{"cleared":false}');
 
-        $this->assertFalse($this->client()->deliverAll());
+        $this->assertNull($this->client()->purgeAll());
     }
 
     public function testAnAcknowledgedFullClearIsDelivered(): void
     {
         $this->http->answer('edge-1', 200, '{"cleared":true,"entries_removed":12}');
 
-        $this->assertTrue($this->client()->deliverAll());
+        $this->assertNotNull($this->client()->purgeAll());
     }
 
     public function testWithoutATokenNothingIsSent(): void
@@ -310,27 +311,31 @@ class TridentClientTest extends TestCase
         );
     }
 
-    public function testExplainSendsHeadersAsAJsonObject(): void
+    public function testExplainGoesThroughTheLibraryAndAHostHeaderNamesTheSite(): void
     {
         $this->http->answer('edge-1', 200, '{"cacheable":true}');
-        $this->client()->explain('GET', '/gear.html');
+        $client = $this->client();
 
+        $this->assertSame(['cacheable' => true], $client->explain('GET', '/gear.html'));
+        $client->explain('GET', '/gear.html', ['Host' => 'shop.example']);
+
+        $this->assertSame(['method' => 'GET', 'url' => '/gear.html', 'detail' => true], self::json($this->http->requests[0]['body']));
         $this->assertSame(
-            '{"method":"GET","url":"\/gear.html","headers":{},"detail":true}',
-            $this->only()['body']
+            ['method' => 'GET', 'url' => '/gear.html', 'detail' => true, 'headers' => ['host' => 'shop.example']],
+            self::json($this->http->requests[1]['body'])
         );
     }
 
     /**
-     * An empty body is `{}`: the engine's struct deserializers refuse `[]`,
-     * which is what the module used to send for a POST without data.
+     * A POST without data carries no body at all (the library's Api); the
+     * module used to send `[]`, which the engine's parsers refuse.
      */
-    public function testAPostWithoutDataSendsAnEmptyObject(): void
+    public function testAPostWithoutDataSendsNoArray(): void
     {
         $this->http->answer('edge-1', 200, '{"cancelled":true}');
         $this->client()->warmerCancel();
 
-        $this->assertSame('{}', $this->only()['body']);
+        $this->assertNull($this->only()['body']);
     }
 
     public function testADiscoveryRefreshNamesTheBackendInTheQuery(): void
@@ -367,10 +372,7 @@ class TridentClientTest extends TestCase
         $client = $this->client();
 
         $this->assertNull($client->warmerRun());
-        $this->assertSame(
-            'POST /admin/warmer/run: HTTP 404: The cache warmer is not enabled',
-            $client->lastFailure()
-        );
+        $this->assertSame('admin API: HTTP 404: The cache warmer is not enabled', $client->lastFailure());
     }
 
     public function testAnUnauthorizedReadIsNullAndSaysSo(): void
@@ -422,7 +424,7 @@ class TridentClientTest extends TestCase
         $this->twoEdges();
         $this->http->answer('edge-1', 200, '{"cleared":true}')->answer('edge-2', 200, '{"cleared":true}');
 
-        $this->assertTrue($this->client()->deliverAll());
+        $this->assertNotNull($this->client()->purgeAll());
         $this->assertSame(
             ['http://edge-1:9301/admin/cache/clear', 'http://edge-2:9301/admin/cache/clear'],
             array_column($this->http->requests, 'url')
@@ -524,5 +526,147 @@ class TridentClientTest extends TestCase
         $this->assertFalse($client->isEnabled());
         $this->assertNull($client->getStats());
         $this->assertSame([], $this->http->requests);
+    }
+
+    // ---- review fixes -----------------------------------------------------
+
+    /**
+     * Review #2: the admin plugins gate every purge on isEnabled(). Basing it
+     * on the SELECTED instance meant that showing an instance without a token
+     * switched off all admin purges (cache flush, cache clean).
+     */
+    public function testChoosingAnInstanceWithoutATokenDoesNotSwitchTheClientOff(): void
+    {
+        $this->instances = [
+            new Instance('edge-1', 'http://edge-1:9301', 'token-1'),
+            new Instance('edge-2', 'http://edge-2:9301', ''),
+        ];
+        $this->selected = 'edge-2';
+        $client = $this->client();
+
+        $this->assertTrue($client->isEnabled(), 'edge-1 has a token');
+        $this->assertNull($client->getStats(), 'but edge-2, which the screen shows, cannot be asked');
+        $this->assertSame('instance "edge-2" has no API token', $client->lastFailure());
+        $this->assertSame([], $this->http->requests, 'no empty-Bearer request');
+    }
+
+    public function testNoTokenAnywhereIsDisabled(): void
+    {
+        $this->instances = [
+            new Instance('edge-1', 'http://edge-1:9301', ''),
+            new Instance('edge-2', 'http://edge-2:9301', ''),
+        ];
+
+        $this->assertFalse($this->client()->isEnabled());
+    }
+
+    public function testABoundClientIsEnabledByItsOwnToken(): void
+    {
+        $this->instances = [
+            new Instance('edge-1', 'http://edge-1:9301', 'token-1'),
+            new Instance('edge-2', 'http://edge-2:9301', ''),
+        ];
+
+        $this->assertFalse($this->client()->forInstance($this->instances[1])->isEnabled());
+    }
+
+    /**
+     * @return array<string, array{int, string}>
+     */
+    public static function notTheAdminApi(): array
+    {
+        return [
+            'redirect to a login page' => [302, ''],
+            'proxy error page with 200' => [200, '<html>Bad gateway</html>'],
+        ];
+    }
+
+    /**
+     * Review #1 (qoliber/trident-php 1.4.1): an answer that is not the admin
+     * API's is not data — screens reported success when Trident never answered.
+     */
+    #[DataProvider('notTheAdminApi')]
+    public function testAnAnswerThatIsNotTheAdminApiIsNotData(int $status, string $body): void
+    {
+        $this->http->answer('edge-1', $status, $body);
+        $client = $this->client();
+
+        $this->assertNull($client->getStats());
+        $this->assertNull($client->reflectEnable());
+        $this->assertNotNull($client->lastFailure());
+    }
+
+    /**
+     * The engine's warmer run takes no body; a URL list sent there was ignored
+     * and the configured sources warmed instead.
+     */
+    public function testWarmingGivenUrlsQueuesThem(): void
+    {
+        $this->http->answer('edge-1', 200, '{"queued":2}');
+        $this->client()->warmerRun(['/a.html', '/b.html']);
+
+        $request = $this->only();
+        $this->assertSame('http://edge-1:9301/admin/warmer/queue', $request['url']);
+        $this->assertSame(['urls' => ['/a.html', '/b.html']], self::json($request['body']));
+    }
+
+    public function testWarmingWithoutUrlsRunsTheConfiguredSources(): void
+    {
+        $this->http->answer('edge-1', 202, '{"status":"started","queued":10}');
+
+        $this->assertSame(['status' => 'started', 'queued' => 10], $this->client()->warmerRun());
+        $this->assertSame('http://edge-1:9301/admin/warmer/run', $this->only()['url']);
+    }
+
+    /**
+     * Endpoints the library returns raw go through its typed client; the
+     * screens get the engine's answer unchanged.
+     */
+    public function testDelegatedCallsSendWhatTheEngineExpects(): void
+    {
+        $this->http->answer('edge-1', 200, '{"ok":true,"extra":{"kept":1}}');
+        $client = $this->client();
+
+        $this->assertSame(['ok' => true, 'extra' => ['kept' => 1]], $client->getReflectStatus());
+        $client->reflectEnable('selective', '10m', 'deploy');
+        $client->cacheCoverage(['/a.html'], 'shop.example', 'https');
+        $client->denoiserQueryUnpin('utm_x');
+        $client->denoiserPathReset();
+
+        $sent = array_map(fn (array $r): array => [$r['method'], $r['url'], self::json($r['body'])], $this->http->requests);
+        $this->assertSame([
+            ['GET', 'http://edge-1:9301/admin/reflect/status', []],
+            ['POST', 'http://edge-1:9301/admin/reflect/enable', ['level' => 'selective', 'duration' => '10m', 'reason' => 'deploy']],
+            ['POST', 'http://edge-1:9301/admin/cache/coverage', ['urls' => ['/a.html'], 'host' => 'shop.example', 'scheme' => 'https']],
+            ['POST', 'http://edge-1:9301/admin/denoisers/query/unpin', ['param' => 'utm_x', 'host' => '*', 'path_prefix' => '/']],
+            ['POST', 'http://edge-1:9301/admin/denoisers/path/reset', []],
+        ], $sent);
+    }
+
+    public function testATagPatternPurgeIsExplicitAboutItsMode(): void
+    {
+        $this->http->answer('edge-1', 200, '{"purged":1,"mode":"hard"}');
+        $this->client()->purgeTagPattern('cat_*');
+
+        $this->assertSame(
+            ['pattern' => 'cat_*', 'pattern_type' => 'wildcard', 'mode' => 'hard'],
+            self::json($this->only()['body'])
+        );
+    }
+
+    /**
+     * The one clear path, as the outbox delivers it: an instance that did not
+     * answer is marked unreachable, so the drain does not try it again.
+     */
+    public function testAClearOfAnInstanceIsJudgedAndSaysWhenNothingAnswered(): void
+    {
+        $this->twoEdges();
+        $this->http->answer('edge-1', 200, '{"cleared":true}')->down('edge-2');
+        $client = $this->client();
+
+        $this->assertTrue($client->clear($this->instances[0])->acknowledged());
+        $down = $client->clear($this->instances[1]);
+        $this->assertFalse($down->acknowledged());
+        $this->assertTrue($down->unreachable);
     }
 }

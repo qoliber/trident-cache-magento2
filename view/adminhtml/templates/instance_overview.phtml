@@ -22,12 +22,13 @@ use Qoliber\TridentCache\ViewModel\Instances;
  * @var Instances $viewModel
  */
 $viewModel = $block->getData('view_model');
-if (!$viewModel->isTridentConfigured()) {
+if (!$viewModel->isTridentConfigured() || (!$viewModel->hasSeveral() && $viewModel->errors() === [])) {
     return;
 }
 $rows = $viewModel->overview();
 ?>
 <div class="trident-instance-overview">
+    <?php if ($rows !== []): ?>
     <h3><?= $escaper->escapeHtml(__('Trident instances')) ?></h3>
     <table class="data-grid trident-instances">
         <thead>
@@ -73,6 +74,7 @@ $rows = $viewModel->overview();
         <?php endforeach; ?>
         </tbody>
     </table>
+    <?php endif; ?>
     <?php foreach ($viewModel->errors() as $error): ?>
         <div class="message message-warning">
             <?= $escaper->escapeHtml(__('app/etc/env.php instance skipped: %1', $error)) ?>

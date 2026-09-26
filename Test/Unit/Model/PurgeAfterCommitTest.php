@@ -15,6 +15,7 @@ use Qoliber\Trident\Delivery\Instance;
 use Qoliber\TridentCache\Model\Config;
 use Qoliber\TridentCache\Model\Outbox\DbPurgeOutbox;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
+use Qoliber\TridentCache\Model\TridentClient;
 use Qoliber\TridentCache\Test\Unit\Model\Fake\FixedClock;
 use Qoliber\TridentCache\Test\Unit\Model\Fake\ScriptedTransport;
 use Qoliber\TridentCache\Test\Unit\Model\Fake\TransactionalOutbox;
@@ -54,6 +55,7 @@ class PurgeAfterCommitTest extends TestCase
         $this->config->method('isTridentEnabled')->willReturnCallback(fn (): bool => $this->trident);
         $this->config->method('getInstances')->willReturnCallback(fn (): array => $this->instances);
         $this->config->method('isSoftPurgeEnabled')->willReturnCallback(fn (): bool => $this->soft);
+        $this->config->method('getPurgeMode')->willReturnCallback(fn (): string => $this->soft ? 'soft' : 'hard');
         $this->outbox = new TransactionalOutbox(fn (): bool => $this->level > 0);
         $this->http = new ScriptedTransport();
         $this->clock = new FixedClock();
@@ -632,7 +634,14 @@ class PurgeAfterCommitTest extends TestCase
     /** A PurgeAfterCommit in a fresh PHP process: same database, no memory. */
     private function newProcess(): PurgeAfterCommit
     {
-        return new PurgeAfterCommit($this->resource, $this->outbox, $this->config, $this->http, new NullLogger(), $this->clock);
+        return new PurgeAfterCommit(
+            $this->resource,
+            $this->outbox,
+            $this->config,
+            new TridentClient($this->http, new NullLogger(), $this->config),
+            new NullLogger(),
+            $this->clock
+        );
     }
 
     private function commitTo(int $level): void

@@ -167,6 +167,17 @@ class Config
         return (bool) $this->scopeConfig->getValue(self::XML_TRIDENT_SOFT_PURGE);
     }
 
+    /**
+     * The purge mode every purge asks for — always explicit, because without
+     * it the engine applies its own admin.default_purge_mode.
+     *
+     * @return string soft|hard
+     */
+    public function getPurgeMode(): string
+    {
+        return $this->isSoftPurgeEnabled() ? 'soft' : 'hard';
+    }
+
     public function isDebugEnabled(): bool
     {
         return (bool) $this->scopeConfig->getValue(self::XML_TRIDENT_DEBUG);
