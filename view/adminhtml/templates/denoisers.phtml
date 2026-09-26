@@ -161,6 +161,10 @@ $viewModel = $block->getData('view_model');
                                                 <input type="hidden" name="kind" value="query"/>
                                                 <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($scopePathPrefix) ?>"/>
                                                 <input type="text" name="param" class="admin__control-text" placeholder="<?= $escaper->escapeHtmlAttr(__('param')) ?>" required/>
+                                                <select name="class" class="admin__control-select" required>
+                                                    <option value="noise"><?= $escaper->escapeHtml(__('as noise')) ?></option>
+                                                    <option value="signal"><?= $escaper->escapeHtml(__('as signal')) ?></option>
+                                                </select>
                                                 <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin')) ?></span></button>
                                             </form>
                                             <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/unpin')) ?>" method="post" class="trident-inline-form">
@@ -177,6 +181,17 @@ $viewModel = $block->getData('view_model');
                         </table>
                     </div>
                 <?php endif; ?>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/pin')) ?>" method="post" class="trident-inline-form trident-pin-new">
+                    <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                    <input type="hidden" name="kind" value="query"/>
+                    <input type="text" name="param" class="admin__control-text" placeholder="<?= $escaper->escapeHtmlAttr(__('param')) ?>" required/>
+                    <input type="text" name="path_prefix" class="admin__control-text" placeholder="/"/>
+                    <select name="class" class="admin__control-select" required>
+                        <option value="noise"><?= $escaper->escapeHtml(__('as noise')) ?></option>
+                        <option value="signal"><?= $escaper->escapeHtml(__('as signal')) ?></option>
+                    </select>
+                    <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin a parameter')) ?></span></button>
+                </form>
             </div>
 
             <?php $zones = $viewModel->getPathZones(); ?>
@@ -215,6 +230,10 @@ $viewModel = $block->getData('view_model');
                                                 <input type="hidden" name="kind" value="path"/>
                                                 <input type="hidden" name="host" value="<?= $escaper->escapeHtmlAttr($zoneHost) ?>"/>
                                                 <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($zonePathPrefix) ?>"/>
+                                                <select name="status" class="admin__control-select" required>
+                                                    <option value="dead"><?= $escaper->escapeHtml(__('as dead')) ?></option>
+                                                    <option value="alive"><?= $escaper->escapeHtml(__('as alive')) ?></option>
+                                                </select>
                                                 <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin')) ?></span></button>
                                             </form>
                                             <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/unpin')) ?>" method="post" class="trident-inline-form">
@@ -231,6 +250,17 @@ $viewModel = $block->getData('view_model');
                         </table>
                     </div>
                 <?php endif; ?>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/pin')) ?>" method="post" class="trident-inline-form trident-pin-new">
+                    <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                    <input type="hidden" name="kind" value="path"/>
+                    <input type="text" name="host" class="admin__control-text" placeholder="<?= $escaper->escapeHtmlAttr(__('host, or *')) ?>" required/>
+                    <input type="text" name="path_prefix" class="admin__control-text" placeholder="/old-shop/" required/>
+                    <select name="status" class="admin__control-select" required>
+                        <option value="dead"><?= $escaper->escapeHtml(__('as dead')) ?></option>
+                        <option value="alive"><?= $escaper->escapeHtml(__('as alive')) ?></option>
+                    </select>
+                    <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin a zone')) ?></span></button>
+                </form>
             </div>
 
             <div class="trident-api-info">

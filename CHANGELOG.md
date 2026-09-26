@@ -24,6 +24,10 @@ object manager) must follow these changes to public API released in 1.5.2:
   `(Qoliber\Trident\Delivery\Transport $transport, LoggerInterface $logger, Config $config, ?InstanceSelection $selection = null)`
   — it was `(Curl $curl, LoggerInterface $logger, Config $config)`. Every
   public method of 1.5.2 keeps its signature and return type.
+- `Model\TridentClient::denoiserQueryPin()` and `denoiserPathPin()` take the
+  class (`noise`|`signal`) and status (`dead`|`alive`) the engine requires as
+  a new last parameter; without it the library refuses the pin
+  (`Qoliber\Trident\Exception\InvalidRequest`), as the engine did before.
 - `Model\TridentClient::instances()` (new since 1.5.2) returns
   `list<Qoliber\Trident\Delivery\Instance>`.
 - `Model\PurgeAfterCommit::__construct()` takes
@@ -42,7 +46,7 @@ object manager) must follow these changes to public API released in 1.5.2:
 ### Changed — built on qoliber/trident-php
 
 The module now requires [`qoliber/trident-php`](https://packagist.org/packages/qoliber/trident-php)
-`^1.4.1`, the library every Trident platform integration shares, instead of
+`^1.5`, the library every Trident platform integration shares, instead of
 carrying its own copy of the same code:
 
 - **Durable purge delivery** is the library's: the outbox implements its
@@ -53,11 +57,19 @@ carrying its own copy of the same code:
   Magento's own: recording inside the save's transaction, sending from the
   commit callback, holding config purges until the configuration reloads,
   queued full clears, and splitting rows written before X03.
-- **The admin API**: reads and actions the library returns raw go through its
-  typed client, invalidations on several instances through its `Fleet`, and
-  every other request through its `Api` (bearer token, JSON, one retry when
-  the admin limiter answers 429, and — since 1.4.1 — a redirect or a non-JSON
-  answer is an error, not data), over Magento's Guzzle instead of `Curl`.
+- **The admin API** is the library's typed client, for every call: the screens
+  get each answer as the engine sent it (`raw()`), so no field is lost; its
+  request path (bearer token, JSON, one retry when the admin limiter answers
+  429, a redirect or a non-JSON answer treated as an error) runs over
+  Magento's Guzzle instead of `Curl`. Invalidations on several instances run
+  through its `Fleet`.
+- **Purges** are its `purge(PurgeRequest)` (tags with `exclude_tags`, URL, tag
+  pattern) and its host, vary and URL-pattern purges, always with the store's
+  soft/hard setting sent explicitly (a request without a mode would take the
+  engine's `default_purge_mode`); a full clear is `clearCache()` on the
+  screens and `PurgeClient::clear()` in delivery. The counts Trident reports
+  are shown: the purge and clear messages name the entries removed, and
+  `trident:purge:drain` prints the cache entries purged.
 - **Instances** are parsed by the library's `Instances::parse()`, the rules
   every integration uses. An instance name in `app/etc/env.php` must be
   **1-64 characters of `A-Z a-z 0-9 . _ -`** (it is stored with each pending
@@ -113,28 +125,24 @@ carrying its own copy of the same code:
 - **A POST without data sent `[]`**, which the engine's request parsers refuse;
   it now sends `{}` or no body.
 
-### Known — library gaps (qoliber/trident-php 1.4.1)
+### Added — denoiser pins work
 
-The module still names these endpoints itself (through the library's `Api`),
-because the library cannot yet do what the screens need:
+The engine requires a class (`noise`|`signal`) to pin a query parameter and a
+status (`dead`|`alive`) to pin a path zone; the forms did not ask for them, so
+every pin failed. They now do — on each learned scope and zone, and in new
+"Pin a parameter" / "Pin a zone" forms for ones not learned yet. A value the
+library refuses (`InvalidRequest`) is shown as a form error; nothing is sent.
 
-- The typed client's answers for stats, health, rules, top URLs, entries,
-  tags, backends, connections, bans, discovery, latency/error/protection
-  statistics, memory, the refresh queue and launch actions are normalised
-  objects whose `toArray()` drops fields the screens show
-  (`CacheStatsResponse::toArray()` has no `hits`, `misses` or `hit_ratio`),
-  and none exposes the raw answer.
-- `purgeTags()` cannot send `exclude_tags`, `purgeTags()`, `purgeTagPattern()`
-  and `purgeAll()` cannot send the purge `mode` (so the engine's default
-  applies), and `purgeAll()` reads a clear's answer as a `PurgeResponse`.
-  `PurgeClient` has no full clear, and its `PurgeAttempt` carries no answer
-  (the counts the purge screens show).
-- `explain()` can send only the `host` header, `coverage()` cannot send the
-  method; the WAF export has no method.
-- Denoiser pins (not a library gap): the engine and the library's
-  `denoiserQueryPin()`/`denoiserPathPin()` require `class` (query) or `status`
-  (path), which this module's forms do not collect yet, so pinning fails
-  until they do; the module's two pin methods stay on `Api` until then.
+### Known — library gaps (qoliber/trident-php 1.5.0)
+
+What the module still does itself, because the library cannot yet:
+
+- `coverage()` cannot send the request `method`; Cache Coverage calls the
+  endpoint through the library's `Api`.
+- Narrowing the WAF export (and the learned noise) to the store's own hosts:
+  the engine keys zones as `host|prefix`, and that parsing is platform-neutral
+  (the WooCommerce plugin has it as `WafView`) — it belongs in the library.
+  Until then the module's WAF export is the whole instance's.
 
 ### Fixed — a purge deferred by Reflect mode was retried as a failure
 

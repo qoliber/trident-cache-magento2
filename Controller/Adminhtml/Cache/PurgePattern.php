@@ -44,9 +44,10 @@ class PurgePattern extends Action
             $result = $this->tridentClient->purgePattern($pattern);
 
             if ($result) {
-                $this->messageManager->addSuccessMessage(
-                    __('Cache purged for pattern: %1', $pattern)
-                );
+                $count = $this->tridentClient->purgedCount($result);
+                $this->messageManager->addSuccessMessage($count === null
+                    ? __('Cache purged for pattern: %1', $pattern)
+                    : __('Cache purged for pattern: %1 (%2 entries).', $pattern, $count));
             } else {
                 $this->messageManager->addErrorMessage(
                     __('Failed to purge by pattern. Please check the logs.')

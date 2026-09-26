@@ -38,9 +38,10 @@ class PurgeAll extends Action
             $result = $this->tridentClient->purgeAll();
 
             if ($result) {
-                $this->messageManager->addSuccessMessage(
-                    __('Trident cache has been purged successfully.')
-                );
+                $count = $this->tridentClient->purgedCount($result);
+                $this->messageManager->addSuccessMessage($count === null
+                    ? __('Trident cache has been purged successfully.')
+                    : __('Trident cache has been purged successfully: %1 entries removed.', $count));
             } else {
                 $this->messageManager->addErrorMessage(
                     __('Failed to purge Trident cache. Please check the logs.')

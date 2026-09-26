@@ -51,9 +51,10 @@ class PurgeTags extends Action
             $result = $this->tridentClient->purgeTags($tagsArray);
 
             if ($result) {
-                $this->messageManager->addSuccessMessage(
-                    __('Cache tags purged successfully: %1', implode(', ', $tagsArray))
-                );
+                $count = $this->tridentClient->purgedCount($result);
+                $this->messageManager->addSuccessMessage($count === null
+                    ? __('Cache tags purged successfully: %1', implode(', ', $tagsArray))
+                    : __('Cache tags purged successfully: %1 (%2 entries).', implode(', ', $tagsArray), $count));
             } else {
                 $this->messageManager->addErrorMessage(
                     __('Failed to purge cache tags. Please check the logs.')

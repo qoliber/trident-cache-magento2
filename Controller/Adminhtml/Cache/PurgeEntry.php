@@ -51,7 +51,11 @@ class PurgeEntry extends Action implements HttpPostActionInterface
             $result = $this->tridentClient->purgeUrl($url, $host);
 
             if ($result !== null) {
-                return $resultJson->setData(['success' => true, 'message' => 'Entry purged successfully']);
+                return $resultJson->setData([
+                    'success' => true,
+                    'message' => 'Entry purged successfully',
+                    'purged' => $this->tridentClient->purgedCount($result),
+                ]);
             }
 
             return $resultJson->setData(['success' => false, 'message' => 'Failed to purge entry']);
