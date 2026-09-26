@@ -14,11 +14,12 @@ namespace Qoliber\TridentCache\Controller\Adminhtml\Cache;
 
 use Magento\Backend\App\Action;
 use Magento\Backend\App\Action\Context;
+use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Redirect;
 use Psr\Log\LoggerInterface;
 use Qoliber\TridentCache\Model\TridentClient;
 
-class PurgePattern extends Action
+class PurgePattern extends Action implements HttpPostActionInterface
 {
     public const ADMIN_RESOURCE = 'Qoliber_TridentCache::purge';
 
@@ -44,9 +45,10 @@ class PurgePattern extends Action
             $result = $this->tridentClient->purgePattern($pattern);
 
             if ($result) {
-                $this->messageManager->addSuccessMessage(
-                    __('Cache purged for pattern: %1', $pattern)
-                );
+                $done = $this->tridentClient->describePurge($result);
+                $this->messageManager->addSuccessMessage($done === ''
+                    ? __('Cache purged for pattern: %1', $pattern)
+                    : __('Cache purged for pattern: %1 — %2.', $pattern, $done));
             } else {
                 $this->messageManager->addErrorMessage(
                     __('Failed to purge by pattern. Please check the logs.')

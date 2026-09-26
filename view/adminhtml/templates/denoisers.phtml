@@ -99,6 +99,9 @@ $viewModel = $block->getData('view_model');
                 <p class="trident-card-description">
                     <?= $escaper->escapeHtml(__('Export learned denoiser rules in the trident-waf-v1 format, or reset the learned state for either denoiser.')) ?>
                 </p>
+                <p class="message message-notice trident-waf-scope">
+                    <?= $escaper->escapeHtml(__('The export covers every site on this Trident instance, not only this store: review the zones and parameters of other hosts before applying it to a WAF.')) ?>
+                </p>
                 <div class="trident-form">
                     <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/exportWaf')) ?>" method="post" style="display:inline-block;">
                         <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
@@ -149,6 +152,9 @@ $viewModel = $block->getData('view_model');
                                     $noise = is_array($scope['noise'] ?? null) ? $scope['noise'] : [];
                                     $signal = is_array($scope['signal'] ?? null) ? $scope['signal'] : [];
                                     $parts = explode('|', $scopeKey, 2);
+                                    // The scope's own host: Trident matches a pin by the
+                                    // request's host, never by "*".
+                                    $scopeHost = $parts[0];
                                     $scopePathPrefix = $parts[1] ?? '';
                                     ?>
                                     <tr>
@@ -159,13 +165,19 @@ $viewModel = $block->getData('view_model');
                                             <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/pin')) ?>" method="post" class="trident-inline-form">
                                                 <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
                                                 <input type="hidden" name="kind" value="query"/>
+                                                <input type="hidden" name="host" value="<?= $escaper->escapeHtmlAttr($scopeHost) ?>"/>
                                                 <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($scopePathPrefix) ?>"/>
                                                 <input type="text" name="param" class="admin__control-text" placeholder="<?= $escaper->escapeHtmlAttr(__('param')) ?>" required/>
+                                                <select name="class" class="admin__control-select" required>
+                                                    <option value="noise"><?= $escaper->escapeHtml(__('as noise')) ?></option>
+                                                    <option value="signal"><?= $escaper->escapeHtml(__('as signal')) ?></option>
+                                                </select>
                                                 <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin')) ?></span></button>
                                             </form>
                                             <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/unpin')) ?>" method="post" class="trident-inline-form">
                                                 <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
                                                 <input type="hidden" name="kind" value="query"/>
+                                                <input type="hidden" name="host" value="<?= $escaper->escapeHtmlAttr($scopeHost) ?>"/>
                                                 <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($scopePathPrefix) ?>"/>
                                                 <input type="text" name="param" class="admin__control-text" placeholder="<?= $escaper->escapeHtmlAttr(__('param')) ?>" required/>
                                                 <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Unpin')) ?></span></button>
@@ -177,6 +189,19 @@ $viewModel = $block->getData('view_model');
                         </table>
                     </div>
                 <?php endif; ?>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/pin')) ?>" method="post" class="trident-inline-form trident-pin-new">
+                    <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                    <input type="hidden" name="kind" value="query"/>
+                    <input type="text" name="param" class="admin__control-text" placeholder="<?= $escaper->escapeHtmlAttr(__('param')) ?>" required/>
+                    <input type="text" name="host" class="admin__control-text" value="<?= $escaper->escapeHtmlAttr($viewModel->getStoreHost()) ?>" required/>
+                    <input type="text" name="path_prefix" class="admin__control-text" placeholder="/gear.html" required/>
+                    <select name="class" class="admin__control-select" required>
+                        <option value="noise"><?= $escaper->escapeHtml(__('as noise')) ?></option>
+                        <option value="signal"><?= $escaper->escapeHtml(__('as signal')) ?></option>
+                    </select>
+                    <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin a parameter')) ?></span></button>
+                </form>
+                <p class="note"><?= $escaper->escapeHtml(__('Host and path prefix exactly as the list above shows them (the host with its port): Trident matches a pin by the request\'s host and the exact prefix, never by "*".')) ?></p>
             </div>
 
             <?php $zones = $viewModel->getPathZones(); ?>
@@ -215,6 +240,10 @@ $viewModel = $block->getData('view_model');
                                                 <input type="hidden" name="kind" value="path"/>
                                                 <input type="hidden" name="host" value="<?= $escaper->escapeHtmlAttr($zoneHost) ?>"/>
                                                 <input type="hidden" name="path_prefix" value="<?= $escaper->escapeHtmlAttr($zonePathPrefix) ?>"/>
+                                                <select name="status" class="admin__control-select" required>
+                                                    <option value="dead"><?= $escaper->escapeHtml(__('as dead')) ?></option>
+                                                    <option value="alive"><?= $escaper->escapeHtml(__('as alive')) ?></option>
+                                                </select>
                                                 <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin')) ?></span></button>
                                             </form>
                                             <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/unpin')) ?>" method="post" class="trident-inline-form">
@@ -231,6 +260,18 @@ $viewModel = $block->getData('view_model');
                         </table>
                     </div>
                 <?php endif; ?>
+                <form action="<?= $escaper->escapeUrl($block->getUrl('trident/denoisers/pin')) ?>" method="post" class="trident-inline-form trident-pin-new">
+                    <?= /* @noEscape */ $block->getBlockHtml('formkey') ?>
+                    <input type="hidden" name="kind" value="path"/>
+                    <input type="text" name="host" class="admin__control-text" value="<?= $escaper->escapeHtmlAttr($viewModel->getStoreHost()) ?>" required/>
+                    <input type="text" name="path_prefix" class="admin__control-text" placeholder="/old-shop/" required/>
+                    <select name="status" class="admin__control-select" required>
+                        <option value="dead"><?= $escaper->escapeHtml(__('as dead')) ?></option>
+                        <option value="alive"><?= $escaper->escapeHtml(__('as alive')) ?></option>
+                    </select>
+                    <button type="submit" class="action-default scalable"><span><?= $escaper->escapeHtml(__('Pin a zone')) ?></span></button>
+                </form>
+                <p class="note"><?= $escaper->escapeHtml(__('Host and path prefix exactly as the list above shows them (the host with its port): Trident matches a pin by the request\'s host and the exact prefix, never by "*".')) ?></p>
             </div>
 
             <div class="trident-api-info">

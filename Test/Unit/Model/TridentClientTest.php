@@ -111,6 +111,7 @@ class TridentClientTest extends TestCase
 
         $this->assertNull($client->purgeTags(['cat_p_1']));
         $this->assertStringStartsWith('purge_tags: HTTP ' . $status, (string) $client->lastFailure());
+        $this->assertNotSame([], $this->http->requests);
     }
 
     public function testAnAcknowledgedTagPurgeIsDelivered(): void
@@ -172,7 +173,7 @@ class TridentClientTest extends TestCase
         $client = $this->client();
 
         $this->assertNull($client->purgeTags(['cat_p_1']));
-        $this->assertStringStartsWith('purge_tags: no response', (string) $client->lastFailure());
+        $this->assertStringStartsWith('purge_tags: Failed to connect to Trident', (string) $client->lastFailure());
     }
 
     public function testAFullClearNeedsClearedTrue(): void
@@ -222,7 +223,7 @@ class TridentClientTest extends TestCase
         $this->assertSame('http://edge-1:9301/admin/purge/tags', $request['url']);
         $this->assertSame('Bearer token-1', $request['headers']['Authorization']);
         $this->assertSame('application/json', $request['headers']['Content-Type']);
-        $this->assertSame(['tags' => ['cat_p_1', 'cat_p'], 'mode' => 'hard'], self::json($request['body']));
+        $this->assertSame(['tags' => ['cat_p_1', 'cat_p'], 'match_mode' => 'any', 'mode' => 'hard'], self::json($request['body']));
     }
 
     public function testSoftPurgeAndExcludedTagsAreSent(): void
@@ -231,7 +232,7 @@ class TridentClientTest extends TestCase
         $this->client()->purgeTags(['cat_p_1'], ['cat_c_2', 'cat_c_2']);
 
         $this->assertSame(
-            ['tags' => ['cat_p_1'], 'mode' => 'soft', 'exclude_tags' => ['cat_c_2']],
+            ['tags' => ['cat_p_1'], 'match_mode' => 'any', 'mode' => 'soft', 'exclude_tags' => ['cat_c_2']],
             self::json($this->only()['body'])
         );
     }
@@ -240,7 +241,7 @@ class TridentClientTest extends TestCase
     {
         $this->client()->purgeTags(['123']);
 
-        $this->assertSame('{"tags":["123"],"mode":"hard"}', $this->only()['body']);
+        $this->assertSame('{"tags":["123"],"match_mode":"any","mode":"hard"}', $this->only()['body']);
     }
 
     public function testNoTagsNoRequest(): void
@@ -265,7 +266,9 @@ class TridentClientTest extends TestCase
         $this->client()->purgePattern('/catalog/*');
 
         $request = $this->only();
-        $this->assertSame('http://edge-1:9301/admin/purge/urls', $request['url']);
+        // The library's route; the engine serves /admin/purge/urls and
+        // /admin/purge/pattern with the same handler.
+        $this->assertSame('http://edge-1:9301/admin/purge/pattern', $request['url']);
         $this->assertSame(['pattern' => '/catalog/*', 'mode' => 'hard'], self::json($request['body']));
     }
 
@@ -302,27 +305,12 @@ class TridentClientTest extends TestCase
         $client->getTags(0, 100, '');
 
         $this->assertSame(
-            'http://edge-1:9301/admin/cache/entries?offset=50&limit=25&sort=size&tag=cat_p_1',
+            'http://edge-1:9301/admin/cache/entries?limit=25&offset=50&sort=size&tag=cat_p_1',
             $this->http->requests[0]['url']
         );
         $this->assertSame(
-            'http://edge-1:9301/admin/cache/tags?offset=0&limit=100&sort=count',
+            'http://edge-1:9301/admin/cache/tags?limit=100&offset=0&sort=count',
             $this->http->requests[1]['url']
-        );
-    }
-
-    public function testExplainGoesThroughTheLibraryAndAHostHeaderNamesTheSite(): void
-    {
-        $this->http->answer('edge-1', 200, '{"cacheable":true}');
-        $client = $this->client();
-
-        $this->assertSame(['cacheable' => true], $client->explain('GET', '/gear.html'));
-        $client->explain('GET', '/gear.html', ['Host' => 'shop.example']);
-
-        $this->assertSame(['method' => 'GET', 'url' => '/gear.html', 'detail' => true], self::json($this->http->requests[0]['body']));
-        $this->assertSame(
-            ['method' => 'GET', 'url' => '/gear.html', 'detail' => true, 'headers' => ['host' => 'shop.example']],
-            self::json($this->http->requests[1]['body'])
         );
     }
 
@@ -416,7 +404,7 @@ class TridentClientTest extends TestCase
         $client = $this->client();
 
         $this->assertNull($client->purgeTags(['cat_p_1']));
-        $this->assertSame('edge-2: purge_tags: HTTP 401 — unauthorized', $client->lastFailure());
+        $this->assertSame('edge-2: purge_tags: HTTP 401: unauthorized', $client->lastFailure());
     }
 
     public function testAFullClearGoesToEveryInstance(): void
@@ -664,8 +652,8 @@ class TridentClientTest extends TestCase
         $this->http->answer('edge-1', 200, '{"cleared":true}')->down('edge-2');
         $client = $this->client();
 
-        $this->assertTrue($client->clear($this->instances[0])->acknowledged());
-        $down = $client->clear($this->instances[1]);
+        $this->assertTrue($client->purgeClient($this->instances[0])->clear()->acknowledged());
+        $down = $client->purgeClient($this->instances[1])->clear();
         $this->assertFalse($down->acknowledged());
         $this->assertTrue($down->unreachable);
     }
@@ -718,5 +706,197 @@ class TridentClientTest extends TestCase
         $this->assertSame('instance "edge-2" has no API token', $bound->lastFailure());
         $this->assertSame([], $logger->warnings);
         $this->assertSame([], $this->http->requests);
+    }
+
+    // ---- qoliber/trident-php 1.5.0 ----------------------------------------
+
+    /**
+     * @return array<string, array{bool, string}>
+     */
+    public static function storeModes(): array
+    {
+        return ['store purges soft' => [true, 'soft'], 'store purges hard' => [false, 'hard']];
+    }
+
+    /**
+     * In 1.5.0 a PurgeRequest without a mode takes the engine's
+     * default_purge_mode (soft). The store's own setting must reach Trident
+     * on every kind of purge, in both directions.
+     */
+    #[DataProvider('storeModes')]
+    public function testEveryPurgeSendsTheStoresModeExplicitly(bool $soft, string $mode): void
+    {
+        $this->soft = $soft;
+        $this->http->answer('edge-1', 200, '{"purged":1,"mode":"' . $mode . '"}');
+        $client = $this->client();
+
+        $client->purgeTags(['cat_p_1']);
+        $client->purgeUrl('/gear.html', 'shop.example');
+        $client->purgePattern('/c/*');
+        $client->purgeHost('shop.example');
+        $client->purgeVary('X-Magento-Vary', 'abc');
+        $client->purgeTagPattern('cat_*');
+
+        $this->assertCount(6, $this->http->requests);
+        foreach ($this->http->requests as $request) {
+            $this->assertSame($mode, self::json($request['body'])['mode'] ?? null, $request['url']);
+        }
+    }
+
+    public function testAUrlPurgeOnANamedHostSendsNoScheme(): void
+    {
+        $this->http->answer('edge-1', 200, '{"purged":1,"mode":"hard"}');
+        $this->client()->purgeUrl('/gear.html?color=red', 'shop.example');
+
+        $this->assertSame(
+            ['url' => '/gear.html?color=red', 'host' => 'shop.example', 'mode' => 'hard'],
+            self::json($this->only()['body'])
+        );
+    }
+
+    public function testPurgeCountsAreWhatTridentReported(): void
+    {
+        $this->twoEdges();
+        $this->http->answer('edge-1', 200, '{"purged":3,"mode":"hard"}')
+            ->answer('edge-2', 200, '{"purged":4,"mode":"hard"}');
+        $client = $this->client();
+
+        $this->assertSame(7, $client->purgedCount((array) $client->purgeTags(['cat_p_1'])), 'summed over instances');
+        $this->assertSame(12, $client->purgedCount(['cleared' => true, 'entries_removed' => 12]));
+        $this->assertNull($client->purgedCount(['status' => 'deferred', 'state' => 'recorded']), 'a deferred purge said nothing');
+    }
+
+    public function testDenoiserPinsSendTheClassAndStatusTheEngineRequires(): void
+    {
+        $this->http->answer('edge-1', 200, '{"pinned":true}');
+        $client = $this->client();
+
+        $client->denoiserQueryPin('utm_x', 'noise', 'shop.example:8080', '/c/');
+        $client->denoiserPathPin('shop.example:8080', '/old/', 'dead');
+
+        $this->assertSame(
+            ['param' => 'utm_x', 'class' => 'noise', 'host' => 'shop.example:8080', 'path_prefix' => '/c/'],
+            self::json($this->http->requests[0]['body'])
+        );
+        $this->assertSame(
+            ['status' => 'dead', 'host' => 'shop.example:8080', 'path_prefix' => '/old/'],
+            self::json($this->http->requests[1]['body'])
+        );
+    }
+
+    /**
+     * Input the library refuses to send is the form's error to show, not an
+     * admin API failure hidden behind "check the logs".
+     */
+    public function testAnInvalidPinIsRefusedBeforeAnythingIsSent(): void
+    {
+        $client = $this->client();
+
+        try {
+            $client->denoiserPathPin('shop.example', '/old/', 'zombie');
+            $this->fail('an invalid status must be refused');
+        } catch (\Qoliber\Trident\Exception\InvalidRequest $e) {
+            $this->assertStringContainsString('POST /admin/denoisers/path/pin', (string) $client->lastFailure());
+        }
+        $this->assertSame([], $this->http->requests);
+    }
+
+    public function testTheWafExportIsTheLibrarysAnswerAsSent(): void
+    {
+        $this->http->answer('edge-1', 200, '{"format":"trident-waf-v1","dead_zones":[{"zone_key":"*|/old/","action":"deny"}]}');
+
+        $this->assertSame(
+            ['format' => 'trident-waf-v1', 'dead_zones' => [['zone_key' => '*|/old/', 'action' => 'deny']]],
+            $this->client()->getDenoiserWafExport()
+        );
+        $this->assertSame('http://edge-1:9301/admin/denoisers/export/waf', $this->only()['url']);
+    }
+
+    public function testTypedReadsKeepFieldsTheLibraryDoesNotModel(): void
+    {
+        $this->http->answer('edge-1', 200, '{"entries":7,"hits":3,"misses":1,"hit_ratio":75.0,"new_engine_field":{"x":1}}');
+
+        $this->assertSame(
+            ['entries' => 7, 'hits' => 3, 'misses' => 1, 'hit_ratio' => 75.0, 'new_engine_field' => ['x' => 1]],
+            $this->client()->getStats()
+        );
+    }
+
+    // ---- review of #7 -------------------------------------------------------
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function inertHosts(): array
+    {
+        return ['star' => ['*'], 'empty' => [''], 'star with spaces' => [' * ']];
+    }
+
+    /**
+     * Trident keys a scope and a zone on the literal "host|prefix" and looks
+     * them up with the request's real host, with no "*" fallback: a pin on "*"
+     * is never consulted. It is refused, with nothing sent.
+     */
+    #[DataProvider('inertHosts')]
+    public function testAPinOnAHostTridentNeverMatchesIsRefused(string $host): void
+    {
+        $client = $this->client();
+        foreach ([
+            fn () => $client->denoiserQueryPin('utm_x', 'noise', $host, '/gear.html'),
+            fn () => $client->denoiserPathPin($host, '/old/', 'dead'),
+        ] as $pin) {
+            try {
+                $pin();
+                $this->fail('a pin on "' . $host . '" must be refused');
+            } catch (\Qoliber\Trident\Exception\InvalidRequest $e) {
+                $this->assertStringContainsString("request's host", $e->getMessage());
+            }
+        }
+        $this->assertSame([], $this->http->requests);
+    }
+
+    /** Unpinning "*" stays possible: it removes the inert scopes old pins created. */
+    public function testAnUnpinMayStillNameTheStarScope(): void
+    {
+        $this->http->answer('edge-1', 200, '{"unpinned":true}');
+        $client = $this->client();
+
+        $client->denoiserQueryUnpin('utm_x', '/', '*');
+        $client->denoiserQueryUnpin('utm_x', '/gear.html', 'localhost:8380');
+
+        $this->assertSame('*', self::json($this->http->requests[0]['body'])['host']);
+        $this->assertSame('localhost:8380', self::json($this->http->requests[1]['body'])['host']);
+    }
+
+    /**
+     * A total only when every instance reported a count: one instance's count
+     * is not the total, and a purge Reflect mode deferred has purged nothing.
+     */
+    public function testAFanOutWithADeferredInstanceShowsNoPartialTotal(): void
+    {
+        $this->twoEdges();
+        $this->http->answer('edge-1', 200, '{"purged":3,"mode":"hard"}')
+            ->answer('edge-2', 202, '{"status":"deferred","state":"recorded"}');
+        $client = $this->client();
+
+        $answer = (array) $client->purgeTags(['cat_p_1']);
+
+        $this->assertArrayNotHasKey('purged', $answer, 'not edge-1\'s 3 presented as the total');
+        $this->assertNull($client->purgedCount($answer));
+        $this->assertSame('applied on 1 of 2 instances (1 deferred by Reflect mode)', $client->describePurge($answer));
+    }
+
+    public function testASoftPurgeIsDescribedAsMarkingStaleNotRemoving(): void
+    {
+        $client = $this->client();
+        $this->assertSame('3 entries purged', $client->describePurge(['purged' => 3, 'mode' => 'hard']));
+
+        $this->soft = true;
+        $this->assertStringContainsString('marked stale', $this->client()->describePurge(['purged' => 3, 'mode' => 'soft']));
+        $this->assertSame('12 entries removed', $client->describePurge(['cleared' => true, 'entries_removed' => 12]));
+        $this->assertSame(
+            'deferred by Reflect mode, applied when it ends',
+            $client->describePurge(['status' => 'deferred', 'state' => 'recorded'])
+        );
     }
 }

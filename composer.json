@@ -15,7 +15,7 @@
         "magento/module-customer": "~103.0.8",
         "magento/module-page-cache": "~100.4.8",
         "magento/module-store": "~101.1.8",
-        "qoliber/trident-php": "^1.4.1"
+        "qoliber/trident-php": "^1.5"
     },
     "autoload": {
         "files": [

@@ -109,6 +109,13 @@ class PurgeAfterCommit
     private bool $configFloorRegistered = false;
 
     /**
+     * Cache entries Trident reported purging in the last drain.
+     *
+     * @var int
+     */
+    private int $lastPurged = 0;
+
+    /**
      * @param ResourceConnection $resourceConnection
      * @param PurgeOutboxInterface $outbox
      * @param Config $config
@@ -288,6 +295,8 @@ class PurgeAfterCommit
      */
     public function drain(int $limit, bool $ignoreBackoff = false): int
     {
+        // First: a drain that returns early purged nothing, whatever the last one did.
+        $this->lastPurged = 0;
         if ($this->inTransaction()) {
             return 0;
         }
@@ -323,8 +332,9 @@ class PurgeAfterCommit
                 $tags,
                 fn (OutboxEntry $e): bool => $e->instance === $name && $e->id <= $last
             ));
-            $attempt = $this->tridentClient->clear($instances[$name]);
+            $attempt = $this->tridentClient->purgeClient($instances[$name])->clear();
             if ($attempt->acknowledged()) {
+                $this->lastPurged += (int) $attempt->purged;
                 $ids = array_map(fn (OutboxEntry $e): int => $e->id, [...$owed, ...$covered]);
                 $this->outbox->remove($ids);
                 $removed += count($ids);
@@ -354,7 +364,19 @@ class PurgeAfterCommit
             }
         }
 
+        $this->lastPurged += $report->purged;
         return $removed + $report->delivered;
+    }
+
+    /**
+     * Cache entries Trident reported purging in the last {@see drain()} (the
+     * library's DrainReport, and the entries each full clear removed).
+     *
+     * @return int
+     */
+    public function purgedByLastDrain(): int
+    {
+        return $this->lastPurged;
     }
 
     /**
@@ -410,7 +432,7 @@ class PurgeAfterCommit
     private function clearDirect(): void
     {
         foreach ($this->config->getInstances() as $instance) {
-            $attempt = $this->tridentClient->clear($instance);
+            $attempt = $this->tridentClient->purgeClient($instance)->clear();
             if (!$attempt->acknowledged()) {
                 $this->notAcknowledged($instance->name, 'cache_clear', (string) $attempt->failure);
             }
