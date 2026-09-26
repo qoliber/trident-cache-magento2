@@ -14,12 +14,13 @@ namespace Qoliber\TridentCache\Controller\Adminhtml\Denoisers;
 
 use Magento\Backend\App\Action;
 use Magento\Backend\App\Action\Context;
+use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Redirect;
 use Psr\Log\LoggerInterface;
 use Qoliber\Trident\Exception\InvalidRequest;
 use Qoliber\TridentCache\Model\TridentClient;
 
-class Pin extends Action
+class Pin extends Action implements HttpPostActionInterface
 {
     public const ADMIN_RESOURCE = 'Qoliber_TridentCache::denoisers';
 
@@ -66,15 +67,14 @@ class Pin extends Action
                 }
 
                 $class = trim((string)$this->getRequest()->getParam('class', ''));
-                $result = $this->tridentClient->denoiserQueryPin(
-                    $param,
-                    $pathPrefix !== '' ? $pathPrefix : null,
-                    $class
-                );
+                // The scope's own host, as Trident sees it: a pin is matched by
+                // the request's host, never by "*".
+                $host = trim((string)$this->getRequest()->getParam('host', ''));
+                $result = $this->tridentClient->denoiserQueryPin($param, $class, $host, $pathPrefix);
 
                 if ($result !== null) {
                     $this->messageManager->addSuccessMessage(
-                        __('Query parameter pinned as %2: %1', $param, $class)
+                        __('Query parameter pinned as %2: %1 on %3%4', $param, $class, $host, $pathPrefix)
                     );
                 } else {
                     $this->messageManager->addErrorMessage(__('Failed to pin query parameter. Please check the logs.'));

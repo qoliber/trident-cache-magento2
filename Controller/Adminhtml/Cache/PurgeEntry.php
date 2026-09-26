@@ -55,6 +55,7 @@ class PurgeEntry extends Action implements HttpPostActionInterface
                     'success' => true,
                     'message' => 'Entry purged successfully',
                     'purged' => $this->tridentClient->purgedCount($result),
+                    'summary' => $this->tridentClient->describePurge($result),
                 ]);
             }
 

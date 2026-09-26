@@ -87,7 +87,7 @@ class PurgeDrainCommand extends Command
         $delivered = $this->purgeAfterCommit->drain(5000, true);
         $pending = $this->outbox->stats($this->clock->now())['pending'];
         $output->writeln(sprintf(
-            'delivered: %d, cache entries purged: %d, still pending: %d',
+            'delivered: %d, cache entries purged: %d (a soft purge marks them stale), still pending: %d',
             $delivered,
             $this->purgeAfterCommit->purgedByLastDrain(),
             $pending

@@ -647,6 +647,11 @@ class PurgeAfterCommitTest extends TestCase
         $this->outbox->seed(DbPurgeOutbox::KIND_ALL, []);
         $drain->drain(50);
         $this->assertSame(1, $drain->purgedByLastDrain(), 'the clear removed one entry');
+
+        // A drain that returns early (nothing configured) purged nothing.
+        $this->instances = [];
+        $drain->drain(50);
+        $this->assertSame(0, $drain->purgedByLastDrain(), 'not the previous drain\'s count');
     }
 
     /** A PurgeAfterCommit in a fresh PHP process: same database, no memory. */

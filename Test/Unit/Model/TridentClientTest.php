@@ -314,21 +314,6 @@ class TridentClientTest extends TestCase
         );
     }
 
-    public function testExplainGoesThroughTheLibraryAndAHostHeaderNamesTheSite(): void
-    {
-        $this->http->answer('edge-1', 200, '{"cacheable":true}');
-        $client = $this->client();
-
-        $this->assertSame(['cacheable' => true], $client->explain('GET', '/gear.html'));
-        $client->explain('GET', '/gear.html', ['Host' => 'shop.example']);
-
-        $this->assertSame(['method' => 'GET', 'url' => '/gear.html', 'detail' => true], self::json($this->http->requests[0]['body']));
-        $this->assertSame(
-            ['method' => 'GET', 'url' => '/gear.html', 'detail' => true, 'headers' => ['host' => 'shop.example']],
-            self::json($this->http->requests[1]['body'])
-        );
-    }
-
     /**
      * A POST without data carries no body at all (the library's Api); the
      * module used to send `[]`, which the engine's parsers refuse.
@@ -786,15 +771,15 @@ class TridentClientTest extends TestCase
         $this->http->answer('edge-1', 200, '{"pinned":true}');
         $client = $this->client();
 
-        $client->denoiserQueryPin('utm_x', '/c/', 'noise');
-        $client->denoiserPathPin('shop.example', '/old/', 'dead');
+        $client->denoiserQueryPin('utm_x', 'noise', 'shop.example:8080', '/c/');
+        $client->denoiserPathPin('shop.example:8080', '/old/', 'dead');
 
         $this->assertSame(
-            ['param' => 'utm_x', 'class' => 'noise', 'host' => '*', 'path_prefix' => '/c/'],
+            ['param' => 'utm_x', 'class' => 'noise', 'host' => 'shop.example:8080', 'path_prefix' => '/c/'],
             self::json($this->http->requests[0]['body'])
         );
         $this->assertSame(
-            ['status' => 'dead', 'host' => 'shop.example', 'path_prefix' => '/old/'],
+            ['status' => 'dead', 'host' => 'shop.example:8080', 'path_prefix' => '/old/'],
             self::json($this->http->requests[1]['body'])
         );
     }
@@ -834,6 +819,84 @@ class TridentClientTest extends TestCase
         $this->assertSame(
             ['entries' => 7, 'hits' => 3, 'misses' => 1, 'hit_ratio' => 75.0, 'new_engine_field' => ['x' => 1]],
             $this->client()->getStats()
+        );
+    }
+
+    // ---- review of #7 -------------------------------------------------------
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function inertHosts(): array
+    {
+        return ['star' => ['*'], 'empty' => [''], 'star with spaces' => [' * ']];
+    }
+
+    /**
+     * Trident keys a scope and a zone on the literal "host|prefix" and looks
+     * them up with the request's real host, with no "*" fallback: a pin on "*"
+     * is never consulted. It is refused, with nothing sent.
+     */
+    #[DataProvider('inertHosts')]
+    public function testAPinOnAHostTridentNeverMatchesIsRefused(string $host): void
+    {
+        $client = $this->client();
+        foreach ([
+            fn () => $client->denoiserQueryPin('utm_x', 'noise', $host, '/gear.html'),
+            fn () => $client->denoiserPathPin($host, '/old/', 'dead'),
+        ] as $pin) {
+            try {
+                $pin();
+                $this->fail('a pin on "' . $host . '" must be refused');
+            } catch (\Qoliber\Trident\Exception\InvalidRequest $e) {
+                $this->assertStringContainsString("request's host", $e->getMessage());
+            }
+        }
+        $this->assertSame([], $this->http->requests);
+    }
+
+    /** Unpinning "*" stays possible: it removes the inert scopes old pins created. */
+    public function testAnUnpinMayStillNameTheStarScope(): void
+    {
+        $this->http->answer('edge-1', 200, '{"unpinned":true}');
+        $client = $this->client();
+
+        $client->denoiserQueryUnpin('utm_x', '/', '*');
+        $client->denoiserQueryUnpin('utm_x', '/gear.html', 'localhost:8380');
+
+        $this->assertSame('*', self::json($this->http->requests[0]['body'])['host']);
+        $this->assertSame('localhost:8380', self::json($this->http->requests[1]['body'])['host']);
+    }
+
+    /**
+     * A total only when every instance reported a count: one instance's count
+     * is not the total, and a purge Reflect mode deferred has purged nothing.
+     */
+    public function testAFanOutWithADeferredInstanceShowsNoPartialTotal(): void
+    {
+        $this->twoEdges();
+        $this->http->answer('edge-1', 200, '{"purged":3,"mode":"hard"}')
+            ->answer('edge-2', 202, '{"status":"deferred","state":"recorded"}');
+        $client = $this->client();
+
+        $answer = (array) $client->purgeTags(['cat_p_1']);
+
+        $this->assertArrayNotHasKey('purged', $answer, 'not edge-1\'s 3 presented as the total');
+        $this->assertNull($client->purgedCount($answer));
+        $this->assertSame('applied on 1 of 2 instances (1 deferred by Reflect mode)', $client->describePurge($answer));
+    }
+
+    public function testASoftPurgeIsDescribedAsMarkingStaleNotRemoving(): void
+    {
+        $client = $this->client();
+        $this->assertSame('3 entries purged', $client->describePurge(['purged' => 3, 'mode' => 'hard']));
+
+        $this->soft = true;
+        $this->assertStringContainsString('marked stale', $this->client()->describePurge(['purged' => 3, 'mode' => 'soft']));
+        $this->assertSame('12 entries removed', $client->describePurge(['cleared' => true, 'entries_removed' => 12]));
+        $this->assertSame(
+            'deferred by Reflect mode, applied when it ends',
+            $client->describePurge(['status' => 'deferred', 'state' => 'recorded'])
         );
     }
 }

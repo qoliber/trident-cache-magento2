@@ -295,6 +295,8 @@ class PurgeAfterCommit
      */
     public function drain(int $limit, bool $ignoreBackoff = false): int
     {
+        // First: a drain that returns early purged nothing, whatever the last one did.
+        $this->lastPurged = 0;
         if ($this->inTransaction()) {
             return 0;
         }
@@ -320,7 +322,6 @@ class PurgeAfterCommit
         }
 
         $removed = 0;
-        $this->lastPurged = 0;
         $clearsByInstance = [];
         foreach ($clears as $entry) {
             $clearsByInstance[$entry->instance][] = $entry;

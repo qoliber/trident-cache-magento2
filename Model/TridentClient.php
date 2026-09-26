@@ -183,6 +183,48 @@ class TridentClient
     }
 
     /**
+     * What an acknowledged purge or clear did, for a success message: the
+     * entries purged ("marked stale" for a soft purge — they are served until
+     * refreshed), the entries a clear removed, or, when not every instance
+     * reported a count, on how many instances it applied and how many
+     * deferred it. Empty when the answer says nothing.
+     *
+     * @param array<string, mixed> $answer A purge method's answer.
+     * @return string
+     */
+    public function describePurge(array $answer): string
+    {
+        if (is_int($answer['entries_removed'] ?? null)) {
+            return (string) __('%1 entries removed', $answer['entries_removed']);
+        }
+        if (is_int($answer['purged'] ?? null)) {
+            return $this->config->getPurgeMode() === 'soft'
+                ? (string) __('%1 entries purged (soft purge: marked stale, refreshed on the next request)', $answer['purged'])
+                : (string) __('%1 entries purged', $answer['purged']);
+        }
+        $instances = is_array($answer['instances'] ?? null) ? $answer['instances'] : null;
+        if ($instances === null) {
+            return $this->deferred($answer) ? (string) __('deferred by Reflect mode, applied when it ends') : '';
+        }
+        $deferred = count(array_filter($instances, fn ($a): bool => is_array($a) && $this->deferred($a)));
+        return (string) __(
+            'applied on %1 of %2 instances (%3 deferred by Reflect mode)',
+            count($instances) - $deferred,
+            count($instances),
+            $deferred
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $answer
+     * @return bool
+     */
+    private function deferred(array $answer): bool
+    {
+        return ($answer['state'] ?? null) === 'recorded' || ($answer['status'] ?? null) === 'deferred';
+    }
+
+    /**
      * X02: why the last request was not acknowledged or answered, or null.
      *
      * @return string|null
@@ -358,21 +400,6 @@ class TridentClient
     public function getStatus(): ?array
     {
         return $this->read(fn (AdminClient $c) => $c->status(), 'GET /admin/status');
-    }
-
-    /**
-     * Dry-run cacheability diagnostic: POST /admin/explain, with the request's
-     * headers (`Host` names the site of a path).
-     *
-     * @param array<string, string> $headers
-     * @return array<string, mixed>|null
-     */
-    public function explain(string $method, string $url, array $headers = [], bool $detail = true): ?array
-    {
-        return $this->read(
-            fn (AdminClient $c) => $c->explainRequest($url, $method, $headers, [], $detail),
-            'POST /admin/explain'
-        );
     }
 
     /**
@@ -616,27 +643,41 @@ class TridentClient
     }
 
     /**
-     * Pin a query parameter as `noise` or `signal`.
+     * Pin a query parameter as `noise` or `signal` on one scope: `$host` as
+     * Trident sees it (the request's Host, port included) and the scope's
+     * path prefix, both exactly as the scope list shows them. Trident looks a
+     * scope up by the request's real host, with no `*` fallback, so a pin on
+     * `*` would never be consulted and is refused.
      *
      * @param string $param
-     * @param string|null $pathPrefix
-     * @param string $class noise|signal — anything else is refused before it is sent.
+     * @param string $class noise|signal
+     * @param string $host
+     * @param string $pathPrefix
      * @return array<string, mixed>|null
-     * @throws InvalidRequest An invalid parameter or class: the caller's input, shown as a form error.
+     * @throws InvalidRequest Input the pin cannot take: the caller's to show as a form error.
      */
-    public function denoiserQueryPin(string $param, ?string $pathPrefix = null, string $class = ''): ?array
+    public function denoiserQueryPin(string $param, string $class, string $host, string $pathPrefix): ?array
     {
+        $this->assertPinHost($host);
         return $this->read(
-            fn (AdminClient $c) => $c->denoiserQueryPin($param, $class, '*', $this->prefix($pathPrefix)),
+            fn (AdminClient $c) => $c->denoiserQueryPin($param, $class, $host, $this->prefix($pathPrefix)),
             'POST /admin/denoisers/query/pin'
         );
     }
 
-    /** @return array<string, mixed>|null */
-    public function denoiserQueryUnpin(string $param, ?string $pathPrefix = null): ?array
+    /**
+     * Unpin a query parameter on one scope. `*` is accepted, to remove the
+     * inert `*` scopes earlier pins created.
+     *
+     * @param string $param
+     * @param string|null $pathPrefix
+     * @param string $host
+     * @return array<string, mixed>|null
+     */
+    public function denoiserQueryUnpin(string $param, ?string $pathPrefix = null, string $host = '*'): ?array
     {
         return $this->read(
-            fn (AdminClient $c) => $c->denoiserQueryUnpin($param, '*', $this->prefix($pathPrefix)),
+            fn (AdminClient $c) => $c->denoiserQueryUnpin($param, $host !== '' ? $host : '*', $this->prefix($pathPrefix)),
             'POST /admin/denoisers/query/unpin'
         );
     }
@@ -648,7 +689,8 @@ class TridentClient
     }
 
     /**
-     * Pin a path zone as `dead` or `alive`.
+     * Pin a path zone as `dead` or `alive`, on the zone's real host (see
+     * {@see denoiserQueryPin()}: a pin on `*` is never consulted, and refused).
      *
      * @param string $host
      * @param string $pathPrefix
@@ -658,6 +700,7 @@ class TridentClient
      */
     public function denoiserPathPin(string $host, string $pathPrefix, string $status = ''): ?array
     {
+        $this->assertPinHost($host);
         return $this->read(
             fn (AdminClient $c) => $c->denoiserPathPin($status, $host, $pathPrefix),
             'POST /admin/denoisers/path/pin'
@@ -830,8 +873,13 @@ class TridentClient
         $merged = reset($results);
         foreach (['purged', 'affected', 'queued_refresh', 'entries_removed', 'bytes_freed'] as $count) {
             $values = array_column($results, $count);
+            // A total only when EVERY instance reported one: a deferred purge
+            // (Reflect mode) has purged nothing yet, and one instance's count
+            // is not the total.
             if (count($values) === count($results) && array_filter($values, 'is_int') === $values) {
                 $merged[$count] = array_sum($values);
+            } else {
+                unset($merged[$count]);
             }
         }
         $merged['instances'] = $results;
@@ -960,6 +1008,24 @@ class TridentClient
     private function soft(): bool
     {
         return $this->config->getPurgeMode() === 'soft';
+    }
+
+    /**
+     * @param string $host
+     * @return void
+     * @throws InvalidRequest
+     */
+    private function assertPinHost(string $host): void
+    {
+        $host = trim($host);
+        if ($host === '' || $host === '*') {
+            $this->lastFailure = 'a pin needs the host Trident sees';
+            throw new InvalidRequest(
+                'Trident matches a pin by the request\'s host, so a pin on "' . ($host === '' ? '' : '*')
+                . '" would never be used. Pin on the store\'s host as Trident sees it (with its port), '
+                . 'as the scope and zone lists show it.'
+            );
+        }
     }
 
     /**

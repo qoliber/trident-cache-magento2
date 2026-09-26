@@ -14,11 +14,12 @@ namespace Qoliber\TridentCache\Controller\Adminhtml\Cache;
 
 use Magento\Backend\App\Action;
 use Magento\Backend\App\Action\Context;
+use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Redirect;
 use Psr\Log\LoggerInterface;
 use Qoliber\TridentCache\Model\TridentClient;
 
-class PurgeAll extends Action
+class PurgeAll extends Action implements HttpPostActionInterface
 {
     public const ADMIN_RESOURCE = 'Qoliber_TridentCache::purge';
 
@@ -38,10 +39,10 @@ class PurgeAll extends Action
             $result = $this->tridentClient->purgeAll();
 
             if ($result) {
-                $count = $this->tridentClient->purgedCount($result);
-                $this->messageManager->addSuccessMessage($count === null
+                $done = $this->tridentClient->describePurge($result);
+                $this->messageManager->addSuccessMessage($done === ''
                     ? __('Trident cache has been purged successfully.')
-                    : __('Trident cache has been purged successfully: %1 entries removed.', $count));
+                    : __('Trident cache has been purged successfully: %1.', $done));
             } else {
                 $this->messageManager->addErrorMessage(
                     __('Failed to purge Trident cache. Please check the logs.')

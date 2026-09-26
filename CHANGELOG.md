@@ -24,10 +24,15 @@ object manager) must follow these changes to public API released in 1.5.2:
   `(Qoliber\Trident\Delivery\Transport $transport, LoggerInterface $logger, Config $config, ?InstanceSelection $selection = null)`
   — it was `(Curl $curl, LoggerInterface $logger, Config $config)`. Every
   public method of 1.5.2 keeps its signature and return type.
-- `Model\TridentClient::denoiserQueryPin()` and `denoiserPathPin()` take the
-  class (`noise`|`signal`) and status (`dead`|`alive`) the engine requires as
-  a new last parameter; without it the library refuses the pin
-  (`Qoliber\Trident\Exception\InvalidRequest`), as the engine did before.
+- `Model\TridentClient::denoiserQueryPin($param, $class, $host, $pathPrefix)`
+  (was `($param, ?$pathPrefix)`) and `denoiserPathPin($host, $pathPrefix,
+  $status)` take the class (`noise`|`signal`) or status (`dead`|`alive`) the
+  engine requires and the scope's real host; `denoiserQueryUnpin()` takes the
+  host as a new last parameter (default `*`). A pin without them, or on `*`,
+  throws `Qoliber\Trident\Exception\InvalidRequest`.
+- `Model\TridentClient::explain()` is removed (nothing used it).
+- The admin actions listed under "admin actions are POST-only" no longer
+  answer a GET.
 - `Model\TridentClient::instances()` (new since 1.5.2) returns
   `list<Qoliber\Trident\Delivery\Instance>`.
 - `Model\PurgeAfterCommit::__construct()` takes
@@ -68,8 +73,11 @@ carrying its own copy of the same code:
   soft/hard setting sent explicitly (a request without a mode would take the
   engine's `default_purge_mode`); a full clear is `clearCache()` on the
   screens and `PurgeClient::clear()` in delivery. The counts Trident reports
-  are shown: the purge and clear messages name the entries removed, and
-  `trident:purge:drain` prints the cache entries purged.
+  are shown: the purge messages name the entries purged (a soft purge marks
+  them stale; it does not remove them), a clear the entries removed, and
+  `trident:purge:drain` prints the cache entries purged. On several instances
+  a total is shown only when every instance reported one; otherwise the
+  message says on how many it applied and how many Reflect mode deferred.
 - **Instances** are parsed by the library's `Instances::parse()`, the rules
   every integration uses. An instance name in `app/etc/env.php` must be
   **1-64 characters of `A-Z a-z 0-9 . _ -`** (it is stored with each pending
@@ -133,6 +141,21 @@ every pin failed. They now do — on each learned scope and zone, and in new
 "Pin a parameter" / "Pin a zone" forms for ones not learned yet. A value the
 library refuses (`InvalidRequest`) is shown as a form error; nothing is sent.
 
+Pins are made on the **real host**. Trident keys a scope or zone on the
+literal `host|prefix` and looks it up by the request's host (port included,
+e.g. `localhost:8380`), with no `*` fallback — a pin on `*` would never be
+used. The scope and zone rows send their own host; the standalone forms
+default to the store's host as Trident sees it; a pin on `*` (or no host) is
+refused as a form error. Unpin still accepts `*`, to remove inert `*` scopes.
+
+### Changed — admin actions are POST-only
+
+Every Trident admin action that changes something (purges, bans, the warmer,
+launch, reflect, backends, discovery refresh, denoiser pins/unpins/resets, the
+WAF export) accepts only a POST with the form key. The "Purge Trident Cache"
+button on Cache Management now posts (`deleteConfirm` with post data) instead
+of navigating to the purge URL.
+
 ### Known — library gaps (qoliber/trident-php 1.5.0)
 
 What the module still does itself, because the library cannot yet:
@@ -141,8 +164,9 @@ What the module still does itself, because the library cannot yet:
   endpoint through the library's `Api`.
 - Narrowing the WAF export (and the learned noise) to the store's own hosts:
   the engine keys zones as `host|prefix`, and that parsing is platform-neutral
-  (the WooCommerce plugin has it as `WafView`) — it belongs in the library.
-  Until then the module's WAF export is the whole instance's.
+  (the WooCommerce plugin has it as `WafView`) — it moves into the library
+  (1.6.0, planned). Until then the export covers every site on the instance,
+  and the Denoisers screen says so.
 
 ### Fixed — a purge deferred by Reflect mode was retried as a failure
 

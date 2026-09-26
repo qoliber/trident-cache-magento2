@@ -50,8 +50,10 @@ class CacheBlockPlugin
             'flush_trident',
             [
                 'label' => __('Purge Trident Cache'),
+                // A POST with the form key (deleteConfirm with post data): the
+                // purge controller accepts nothing else.
                 'onclick' => sprintf(
-                    "confirmSetLocation('%s', '%s')",
+                    "deleteConfirm('%s', '%s', {})",
                     $message,
                     $subject->getUrl('trident/cache/purgeAll')
                 ),

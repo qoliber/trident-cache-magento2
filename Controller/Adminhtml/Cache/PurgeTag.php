@@ -54,6 +54,7 @@ class PurgeTag extends Action implements HttpPostActionInterface
                     'success' => true,
                     'message' => 'Tag purged successfully',
                     'purged' => $this->tridentClient->purgedCount($result),
+                    'summary' => $this->tridentClient->describePurge($result),
                 ]);
             }
 
