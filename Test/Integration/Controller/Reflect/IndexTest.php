@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace Qoliber\TridentCache\Test\Integration\Controller\Reflect;
 
-use Magento\Framework\View\Result\Page;
+use Magento\Backend\Model\View\Result\Page;
 use Magento\Framework\View\Result\PageFactory;
 use Magento\TestFramework\Helper\Bootstrap;
 use PHPUnit\Framework\TestCase;

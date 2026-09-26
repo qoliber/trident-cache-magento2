@@ -17,9 +17,10 @@ use Magento\Backend\App\Action\Context;
 use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Json;
 use Magento\Framework\Controller\Result\JsonFactory;
-use Magento\Framework\HTTP\Client\Curl;
 use Psr\Log\LoggerInterface;
 use Qoliber\TridentCache\Model\Config;
+use Qoliber\TridentCache\Model\EventPoller;
+use Qoliber\TridentCache\Model\TridentClient;
 
 class Poll extends Action implements HttpPostActionInterface
 {
@@ -28,18 +29,31 @@ class Poll extends Action implements HttpPostActionInterface
     /** @var array<int, string> */
     private const STREAMS = ['requests', 'cache', 'backends', 'errors'];
 
-    private const POLL_TIMEOUT = 2;
+    /** Seconds one poll listens. */
+    private const POLL_WINDOW = 2.0;
 
+    /**
+     * @param Context $context
+     * @param JsonFactory $resultJsonFactory
+     * @param EventPoller $poller
+     * @param TridentClient $tridentClient
+     * @param Config $config
+     * @param LoggerInterface $logger
+     */
     public function __construct(
         Context $context,
         private readonly JsonFactory $resultJsonFactory,
-        private readonly Curl $curl,
+        private readonly EventPoller $poller,
+        private readonly TridentClient $tridentClient,
         private readonly Config $config,
         private readonly LoggerInterface $logger
     ) {
         parent::__construct($context);
     }
 
+    /**
+     * @return Json
+     */
     public function execute(): Json
     {
         $resultJson = $this->resultJsonFactory->create();
@@ -53,47 +67,25 @@ class Poll extends Action implements HttpPostActionInterface
             $stream = 'requests';
         }
 
-        try {
-            $apiUrl = rtrim($this->config->getApiUrl(), '/');
-
-            $this->curl->setHeaders(['Authorization' => 'Bearer ' . $this->config->getApiToken()]);
-            $this->curl->setOption(CURLOPT_TIMEOUT, self::POLL_TIMEOUT);
-            $this->curl->setOption(CURLOPT_RETURNTRANSFER, true);
-            $this->curl->get($apiUrl . '/admin/events/' . $stream);
-
-            $events = $this->parseEvents((string) $this->curl->getBody());
-
-            return $resultJson->setData(['events' => $events, 'stream' => $stream]);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident events poll failed', ['stream' => $stream, 'error' => $e->getMessage()]);
-            return $resultJson->setData(['events' => [], 'error' => $e->getMessage()]);
+        // X03: the instance the Trident screens are showing.
+        $instance = $this->tridentClient->target();
+        if ($instance === null) {
+            return $resultJson->setData(['events' => [], 'error' => 'No Trident instance is configured.']);
         }
-    }
-
-    /**
-     * Parse `data:` lines out of a buffered SSE chunk into decoded JSON event objects.
-     *
-     * @param string $chunk
-     * @return array<int, array<string, mixed>|string>
-     */
-    private function parseEvents(string $chunk): array
-    {
-        $events = [];
-
-        foreach (preg_split('/\r\n|\r|\n/', $chunk) ?: [] as $line) {
-            if (strpos($line, 'data:') !== 0) {
-                continue;
-            }
-
-            $payload = trim(substr($line, 5));
-            if ($payload === '') {
-                continue;
-            }
-
-            $decoded = json_decode($payload, true);
-            $events[] = $decoded !== null ? $decoded : $payload;
+        $result = $this->poller->poll($instance, $stream, self::POLL_WINDOW);
+        if ($result['error'] !== null) {
+            $this->logger->error('Trident events poll failed', [
+                'instance' => $instance->name,
+                'stream' => $stream,
+                'error' => $result['error'],
+            ]);
         }
 
-        return $events;
+        return $resultJson->setData(array_filter([
+            'events' => $result['events'],
+            'stream' => $stream,
+            'instance' => $instance->name,
+            'error' => $result['error'],
+        ], static fn ($v): bool => $v !== null));
     }
 }

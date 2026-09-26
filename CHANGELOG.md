@@ -13,6 +13,57 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 <!-- At tag time: replace "unreleased" with the release date, tag v1.8.0 at
      that commit, and point the engine submodule at it (F15). -->
 
+### Changed — built on qoliber/trident-php
+
+The module now requires [`qoliber/trident-php`](https://packagist.org/packages/qoliber/trident-php)
+`^1.4`, the library every Trident platform integration shares, instead of
+carrying its own copy of the same code:
+
+- **Durable purge delivery** is the library's: the outbox implements its
+  `OutboxStore` on the existing `qoliber_trident_purge_outbox` table (no
+  schema change, pending rows carry over), and delivery, request packing,
+  acknowledgement, backoff and the three-failure cap are its `Drainer`,
+  `Packer`, `Acknowledgement` and `Backoff`. What stays in the module is
+  Magento's own: recording inside the save's transaction, sending from the
+  commit callback, holding config purges until the configuration reloads,
+  queued full clears, and splitting rows written before X03.
+- **Every admin API request** goes through the library's `Api` (bearer token,
+  JSON, one retry when the admin limiter answers 429 with a wait) over
+  Magento's Guzzle, instead of Magento's `Curl` client.
+- **Instances** are parsed by the library's `Instances::parse()`, the rules
+  every integration uses: a name is 1-64 characters of `A-Z a-z 0-9 . _ -`,
+  and `api_url` must be an http(s) URL. Entries that break a rule are skipped
+  and reported (`trident:purge:status`, the configuration screen), as before.
+- `composer.json` requires real version ranges — Magento 2.4.8 to 2.4.9
+  (`magento/framework ~103.0.8` …), PHP 8.2 to 8.5 — instead of `*`. The
+  footprint is `qoliber/trident-php` plus two PSR interface packages
+  (`psr/http-server-handler`, `psr/http-server-middleware`); Guzzle and the
+  other PSR packages already ship with Magento.
+
+### Added — the Trident screens show every instance (X03)
+
+- **An instance switcher** on every Trident screen (when there are several):
+  statistics, entries, the warmer, launch, reflect, bans, backends, discovery
+  and live events read and act on the instance chosen there, kept in the
+  admin session. Purges still go to every instance.
+- **An overview of all instances** on Statistics and on Cache Management:
+  reachable or not (and why), version, licence, entries, hit rate and the
+  purges pending for each. One instance being down never blanks the others.
+
+### Fixed
+
+- **An error answer was shown as success.** The client returned the decoded
+  body of a 4xx/5xx answer, and every action treats "not null" as done — so a
+  disabled warmer's `{"code":"WARMER_DISABLED"}` read "Warmer started". An
+  error is now reported as a failure, with the engine's reason in the log.
+- **Live Events showed nothing.** The engine keeps an event stream open for as
+  long as the client listens; Magento's `Curl` threw away what had arrived
+  when its 2-second timeout fired and reported "Operation timed out". A poll
+  now keeps the events received within the window — from the selected
+  instance.
+- **A POST without data sent `[]`**, which the engine's request parsers refuse
+  (warmer cancel, launch complete, denoiser resets); it now sends `{}`.
+
 ### Fixed — a purge deferred by Reflect mode was retried as a failure
 
 In Reflect mode Trident answers a purge with HTTP 202, `status: "deferred"`,

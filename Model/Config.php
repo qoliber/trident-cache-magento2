@@ -14,6 +14,8 @@ namespace Qoliber\TridentCache\Model;
 
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
+use Qoliber\Trident\Delivery\Instance;
+use Qoliber\Trident\Delivery\Instances;
 
 class Config
 {
@@ -33,12 +35,9 @@ class Config
     public const XML_TRIDENT_INSTANCES = 'system/full_page_cache/trident/instances';
 
     /** The name of the single instance configured in the admin. */
-    public const DEFAULT_INSTANCE = 'default';
+    public const DEFAULT_INSTANCE = Instances::DEFAULT_NAME;
 
-    /** Instance names are stored with each pending purge. */
-    public const MAX_INSTANCE_NAME = 64;
-
-    /** @var array{0: array<int, Instance>, 1: array<int, string>}|null */
+    /** @var array{0: list<Instance>, 1: list<string>}|null */
     private ?array $instances = null;
 
     public function __construct(
@@ -86,11 +85,16 @@ class Config
      * has changed").
      *
      * Without `instances`, the admin's single API URL and token are the one
-     * instance, exactly as before. Entries without an `api_url` are skipped
+     * instance, exactly as before. The list is parsed by qoliber/trident-php
+     * ({@see Instances::parse()}), the same rules every Trident platform
+     * integration uses: a name is 1-64 characters of `A-Z a-z 0-9 . _ -`
+     * (it is stored with each pending purge, compared case-sensitively), and
+     * `api_url` must be an http(s) URL. Entries that break a rule are skipped
      * and reported by {@see getInstanceErrors()} (and `trident:purge:status`);
      * if none is usable, the admin setting is used rather than nothing.
      *
-     * @return array<int, Instance> Never empty; the first is the dashboard's.
+     * @return list<Instance> Empty only when the admin API URL itself is not
+     *         an http(s) URL; otherwise the first is the dashboard's default.
      */
     public function getInstances(): array
     {
@@ -100,7 +104,7 @@ class Config
     /**
      * X03: why configured instances were skipped.
      *
-     * @return array<int, string>
+     * @return list<string>
      */
     public function getInstanceErrors(): array
     {
@@ -108,7 +112,7 @@ class Config
     }
 
     /**
-     * @return array{0: array<int, Instance>, 1: array<int, string>}
+     * @return array{0: list<Instance>, 1: list<string>}
      */
     private function readInstances(): array
     {
@@ -118,43 +122,24 @@ class Config
     }
 
     /**
-     * @return array{0: array<int, Instance>, 1: array<int, string>}
+     * @return array{0: list<Instance>, 1: list<string>}
      */
     private function parseInstances(): array
     {
-        $configured = $this->scopeConfig->getValue(self::XML_TRIDENT_INSTANCES);
-        $fallback = fn (): array => [new Instance(self::DEFAULT_INSTANCE, $this->getApiUrl(), $this->getApiToken())];
-        if (!is_array($configured) || $configured === []) {
-            return [$fallback(), []];
-        }
-        $adminToken = null;
-
-        $instances = [];
-        $errors = [];
-        $position = 0;
-        foreach ($configured as $key => $entry) {
-            $position++;
-            $name = is_string($key) && $key !== '' ? $key : 'instance-' . $position;
-            if (!is_array($entry)) {
-                $errors[] = sprintf('%s: expected an array with api_url', $name);
-                continue;
-            }
-            $url = trim((string) ($entry['api_url'] ?? ''));
-            if ($url === '') {
-                $errors[] = sprintf('%s: no api_url', $name);
-                continue;
-            }
-            if (strlen($name) > self::MAX_INSTANCE_NAME) {
-                $errors[] = sprintf('%s: name longer than %d characters', $name, self::MAX_INSTANCE_NAME);
-                continue;
-            }
-            $token = isset($entry['api_token']) && (string) $entry['api_token'] !== ''
-                ? (string) $entry['api_token']
-                : ($adminToken ??= $this->getApiToken());
-            $instances[] = new Instance($name, $url, $token);
+        $token = $this->getApiToken();
+        [$instances, $errors] = Instances::parse(
+            $this->scopeConfig->getValue(self::XML_TRIDENT_INSTANCES),
+            $this->getApiUrl(),
+            $token
+        );
+        if ($instances === []) {
+            // A list with no usable entry falls back to the admin setting,
+            // whose own problem (if any) is reported alongside.
+            [$instances, $fallbackErrors] = Instances::parse(null, $this->getApiUrl(), $token);
+            $errors = array_values(array_unique([...$errors, ...$fallbackErrors]));
         }
 
-        return [$instances !== [] ? $instances : $fallback(), $errors];
+        return [$instances, $errors];
     }
 
     public function isSoftPurgeEnabled(): bool

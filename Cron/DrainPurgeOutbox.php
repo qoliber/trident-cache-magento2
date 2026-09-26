@@ -14,6 +14,7 @@ namespace Qoliber\TridentCache\Cron;
 
 use Psr\Log\LoggerInterface;
 use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
+use Qoliber\TridentCache\Model\Clock;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
 
 /**
@@ -36,11 +37,13 @@ class DrainPurgeOutbox
      * @param PurgeAfterCommit $purgeAfterCommit
      * @param PurgeOutboxInterface $outbox
      * @param LoggerInterface $logger
+     * @param Clock $clock
      */
     public function __construct(
         private readonly PurgeAfterCommit $purgeAfterCommit,
         private readonly PurgeOutboxInterface $outbox,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        private readonly Clock $clock
     ) {
     }
 
@@ -50,7 +53,7 @@ class DrainPurgeOutbox
     public function execute(): void
     {
         $this->purgeAfterCommit->drain(self::LIMIT);
-        $stats = $this->outbox->stats();
+        $stats = $this->outbox->stats($this->clock->now());
         if (($stats['oldest_age'] ?? 0) > self::STALE_AFTER) {
             $this->logger->warning('Trident purges are not being acknowledged', $stats);
         }

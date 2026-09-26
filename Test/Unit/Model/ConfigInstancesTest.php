@@ -16,7 +16,7 @@ use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use PHPUnit\Framework\TestCase;
 use Qoliber\TridentCache\Model\Config;
-use Qoliber\TridentCache\Model\Instance;
+use Qoliber\Trident\Delivery\Instance;
 
 /**
  * X03: the instances come from env.php, layered over the admin setting —
@@ -43,7 +43,7 @@ class ConfigInstancesTest extends TestCase
     }
 
     /**
-     * @param array<int, Instance> $instances
+     * @param list<Instance> $instances
      * @return array<int, array{string, string, string}>
      */
     private static function flat(array $instances): array
@@ -120,10 +120,52 @@ class ConfigInstancesTest extends TestCase
 
     public function testANameTooLongToStoreIsRefused(): void
     {
-        $long = str_repeat('e', Config::MAX_INSTANCE_NAME + 1);
+        $long = str_repeat('e', 65);
         $config = $this->config([$long => ['api_url' => 'http://10.0.0.11:9301']]);
 
         $this->assertSame(['default'], array_map(fn (Instance $i): string => $i->name, $config->getInstances()));
-        $this->assertStringContainsString('name longer than 64', $config->getInstanceErrors()[0]);
+        $this->assertStringContainsString('1-64 characters', $config->getInstanceErrors()[0]);
+    }
+
+    /**
+     * The library's rules, shared by every Trident platform integration: a
+     * name is stored with each pending purge and compared case-sensitively,
+     * so it is plain ASCII; an admin API is an http(s) URL.
+     */
+    public function testANameWithCharactersTheOutboxCannotHoldIsRefused(): void
+    {
+        $config = $this->config([
+            'edge 1' => ['api_url' => 'http://10.0.0.11:9301'],
+            'edge-2' => ['api_url' => 'http://10.0.0.12:9301'],
+        ]);
+
+        $this->assertSame(['edge-2'], array_map(fn (Instance $i): string => $i->name, $config->getInstances()));
+        $this->assertStringStartsWith('edge 1: name must be', $config->getInstanceErrors()[0]);
+    }
+
+    public function testAnApiUrlThatIsNotHttpIsRefused(): void
+    {
+        $config = $this->config([
+            'edge-1' => ['api_url' => 'file:///etc/passwd'],
+            'edge-2' => ['api_url' => 'http://10.0.0.12:9301/'],
+        ]);
+
+        $this->assertSame(
+            [['edge-2', 'http://10.0.0.12:9301', 'decrypted(0:3:admin-encrypted)']],
+            self::flat($config->getInstances()),
+            'the trailing slash is trimmed: paths are appended to it'
+        );
+        $this->assertStringContainsString('is not an http(s) URL', $config->getInstanceErrors()[0]);
+    }
+
+    public function testAnAdminUrlThatIsNotHttpLeavesNoInstanceAndSaysWhy(): void
+    {
+        $values = [Config::XML_TRIDENT_API_URL => 'trident:9301'];
+        $scope = $this->createMock(ScopeConfigInterface::class);
+        $scope->method('getValue')->willReturnCallback(fn (string $path): mixed => $values[$path] ?? null);
+        $config = new Config($scope, $this->createMock(EncryptorInterface::class));
+
+        $this->assertSame([], $config->getInstances());
+        $this->assertStringContainsString('"trident:9301" is not an http(s) URL', $config->getInstanceErrors()[0]);
     }
 }

@@ -23,6 +23,14 @@
                     <argument name="view_model" xsi:type="object">Qoliber\TridentCache\ViewModel\Stats</argument>
                 </arguments>
             </block>
+            <block class="Magento\Backend\Block\Template"
+                   name="trident.instance.overview"
+                   template="Qoliber_TridentCache::instance_overview.phtml"
+                   after="trident.cache.status">
+                <arguments>
+                    <argument name="view_model" xsi:type="object">Qoliber\TridentCache\ViewModel\Instances</argument>
+                </arguments>
+            </block>
         </referenceContainer>
     </body>
 </page>

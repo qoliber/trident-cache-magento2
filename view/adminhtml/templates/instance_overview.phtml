@@ -1,0 +1,81 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Instances;
+
+/**
+ * X03: every Trident instance of this store, side by side. One that is down
+ * is shown as down; the others still show.
+ *
+ * @var Template $block
+ * @var Escaper $escaper
+ * @var Instances $viewModel
+ */
+$viewModel = $block->getData('view_model');
+if (!$viewModel->isTridentConfigured()) {
+    return;
+}
+$rows = $viewModel->overview();
+?>
+<div class="trident-instance-overview">
+    <h3><?= $escaper->escapeHtml(__('Trident instances')) ?></h3>
+    <table class="data-grid trident-instances">
+        <thead>
+        <tr>
+            <th class="data-grid-th"><?= $escaper->escapeHtml(__('Instance')) ?></th>
+            <th class="data-grid-th"><?= $escaper->escapeHtml(__('Admin API')) ?></th>
+            <th class="data-grid-th"><?= $escaper->escapeHtml(__('Status')) ?></th>
+            <th class="data-grid-th"><?= $escaper->escapeHtml(__('Version')) ?></th>
+            <th class="data-grid-th"><?= $escaper->escapeHtml(__('License')) ?></th>
+            <th class="data-grid-th"><?= $escaper->escapeHtml(__('Entries')) ?></th>
+            <th class="data-grid-th"><?= $escaper->escapeHtml(__('Hit rate')) ?></th>
+            <th class="data-grid-th"><?= $escaper->escapeHtml(__('Pending purges')) ?></th>
+        </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($rows as $row): ?>
+            <tr class="trident-instance-row<?= $row['ok'] ? '' : ' trident-instance-down' ?>"
+                data-instance="<?= $escaper->escapeHtmlAttr($row['name']) ?>">
+                <td>
+                    <strong><?= $escaper->escapeHtml($row['name']) ?></strong>
+                    <?php if ($row['current']): ?>
+                        <em><?= $escaper->escapeHtml(__('(shown)')) ?></em>
+                    <?php endif; ?>
+                </td>
+                <td><?= $escaper->escapeHtml($row['url']) ?></td>
+                <td>
+                    <?php if ($row['ok']): ?>
+                        <span class="trident-health-ok"><?= $escaper->escapeHtml(__('reachable')) ?></span>
+                    <?php else: ?>
+                        <span class="trident-health-error"><?= $escaper->escapeHtml(__('unreachable')) ?></span>
+                        <?php if ($row['reason'] !== ''): ?>
+                            <br/><small><?= $escaper->escapeHtml($row['reason']) ?></small>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </td>
+                <td><?= $escaper->escapeHtml($row['version'] !== '' ? $row['version'] : '—') ?></td>
+                <td><?= $escaper->escapeHtml($row['ok'] ? trim($row['license'] . ' ' . $row['mode']) : '—') ?></td>
+                <td><?= $escaper->escapeHtml($row['entries'] === null ? '—' : number_format($row['entries'])) ?></td>
+                <?php $hitRate = $row['hit_ratio'] === null ? '—' : number_format($row['hit_ratio'], 2) . '%'; ?>
+                <td><?= $escaper->escapeHtml($hitRate) ?></td>
+                <td><?= $escaper->escapeHtml((string) $row['pending']) ?></td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    <?php foreach ($viewModel->errors() as $error): ?>
+        <div class="message message-warning">
+            <?= $escaper->escapeHtml(__('app/etc/env.php instance skipped: %1', $error)) ?>
+        </div>
+    <?php endforeach; ?>
+</div>

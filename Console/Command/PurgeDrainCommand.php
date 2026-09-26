@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace Qoliber\TridentCache\Console\Command;
 
+use Qoliber\TridentCache\Model\Clock;
 use Qoliber\TridentCache\Model\Config;
 use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
@@ -30,11 +31,13 @@ class PurgeDrainCommand extends Command
      * @param PurgeAfterCommit $purgeAfterCommit
      * @param PurgeOutboxInterface $outbox
      * @param Config $config
+     * @param Clock $clock
      */
     public function __construct(
         private readonly PurgeAfterCommit $purgeAfterCommit,
         private readonly PurgeOutboxInterface $outbox,
-        private readonly Config $config
+        private readonly Config $config,
+        private readonly Clock $clock
     ) {
         parent::__construct();
     }
@@ -75,14 +78,14 @@ class PurgeDrainCommand extends Command
             }
             $output->writeln(sprintf(
                 'forgot %d purge(s) owed to "%s"',
-                $this->outbox->forgetInstance($forget),
+                $this->outbox->forget($forget),
                 $forget
             ));
         }
         // Now, not on the retry schedule: the operator is here because the
         // cause was fixed.
         $delivered = $this->purgeAfterCommit->drain(5000, true);
-        $pending = $this->outbox->stats()['pending'];
+        $pending = $this->outbox->stats($this->clock->now())['pending'];
         $output->writeln(sprintf('delivered: %d, still pending: %d', $delivered, $pending));
         return $pending === 0 ? Command::SUCCESS : Command::FAILURE;
     }

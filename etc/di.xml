@@ -15,6 +15,22 @@
     <preference for="Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface"
                 type="Qoliber\TridentCache\Model\Outbox\DbPurgeOutbox"/>
 
+    <!-- qoliber/trident-php: every admin API request, over Magento's Guzzle -->
+    <preference for="Qoliber\Trident\Delivery\Transport"
+                type="Qoliber\TridentCache\Model\HttpTransport"/>
+
+    <!-- X03: the admin's chosen instance — read lazily, and only in the admin -->
+    <type name="Qoliber\TridentCache\Model\TridentClient">
+        <arguments>
+            <argument name="selection" xsi:type="object">Qoliber\TridentCache\Model\Admin\InstanceSelection\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Qoliber\TridentCache\Model\Admin\InstanceSelection">
+        <arguments>
+            <argument name="session" xsi:type="object">Magento\Backend\Model\Session\Proxy</argument>
+        </arguments>
+    </type>
+
     <type name="Magento\Framework\Console\CommandList">
         <arguments>
             <argument name="commands" xsi:type="array">

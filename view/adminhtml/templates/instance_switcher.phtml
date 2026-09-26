@@ -1,0 +1,49 @@
+<?php
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+
+declare(strict_types=1);
+
+use Magento\Backend\Block\Template;
+use Magento\Framework\Escaper;
+use Qoliber\TridentCache\ViewModel\Instances;
+
+/**
+ * X03: which Trident instance this screen shows and acts on. Invalidations
+ * (purges) still go to every instance.
+ *
+ * @var Template $block
+ * @var Escaper $escaper
+ * @var Instances $viewModel
+ */
+$viewModel = $block->getData('view_model');
+$instances = $viewModel->all();
+if (!$viewModel->isTridentConfigured() || count($instances) < 2) {
+    return;
+}
+$current = $viewModel->current()?->name;
+?>
+<form class="trident-instance-switcher" method="post"
+      action="<?= $escaper->escapeUrl($block->getUrl('trident/instance/select')) ?>">
+    <input type="hidden" name="form_key" value="<?= $escaper->escapeHtmlAttr($block->getFormKey()) ?>"/>
+    <label for="trident-instance"><?= $escaper->escapeHtml(__('Trident instance')) ?></label>
+    <select id="trident-instance" name="instance" class="admin__control-select">
+        <?php foreach ($instances as $instance): ?>
+            <option value="<?= $escaper->escapeHtmlAttr($instance->name) ?>"
+                <?= $instance->name === $current ? 'selected="selected"' : '' ?>>
+                <?= $escaper->escapeHtml($instance->name . ' — ' . $instance->apiUrl) ?>
+            </option>
+        <?php endforeach; ?>
+    </select>
+    <button type="submit" class="action-secondary"><?= $escaper->escapeHtml(__('Show')) ?></button>
+    <span class="trident-instance-note">
+        <?= $escaper->escapeHtml(
+            __('This screen shows and acts on the selected instance. Purges always go to every instance.')
+        ) ?>
+    </span>
+</form>

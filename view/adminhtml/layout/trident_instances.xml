@@ -8,19 +8,17 @@
  * @author      Jakub Winkler <jwinkler@qoliber.com>
  */
 -->
+<!-- X03: the instance switcher, on every Trident screen -->
 <page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
-    <update handle="trident_instances"/>
-    <head>
-        <css src="Qoliber_TridentCache::css/source/_module.less"/>
-    </head>
     <body>
         <referenceContainer name="content">
             <block class="Magento\Backend\Block\Template"
-                   name="trident.dns.index"
-                   template="Qoliber_TridentCache::dns.phtml">
+                   name="trident.instance.switcher"
+                   template="Qoliber_TridentCache::instance_switcher.phtml"
+                   before="-">
                 <arguments>
-                    <argument name="view_model" xsi:type="object">Qoliber\TridentCache\ViewModel\Dns</argument>
+                    <argument name="view_model" xsi:type="object">Qoliber\TridentCache\ViewModel\Instances</argument>
                 </arguments>
             </block>
         </referenceContainer>

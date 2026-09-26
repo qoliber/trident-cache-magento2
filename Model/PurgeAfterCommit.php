@@ -15,7 +15,16 @@ namespace Qoliber\TridentCache\Model;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\Model\CallbackPool;
 use Psr\Log\LoggerInterface;
-use Qoliber\TridentCache\Model\Outbox\OutboxEntry;
+use Qoliber\Trident\Admin\Api;
+use Qoliber\Trident\Delivery\Acknowledgement;
+use Qoliber\Trident\Delivery\Drainer;
+use Qoliber\Trident\Delivery\Instance;
+use Qoliber\Trident\Delivery\OutboxEntry;
+use Qoliber\Trident\Delivery\Packer;
+use Qoliber\Trident\Delivery\PurgeAttempt;
+use Qoliber\Trident\Delivery\PurgeClient;
+use Qoliber\Trident\Delivery\Purger;
+use Qoliber\Trident\Delivery\Transport;
 use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
 
 /**
@@ -43,12 +52,21 @@ use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
  *
  * X02 — durable delivery. Every purge is first RECORDED in the outbox
  * ({@see PurgeOutboxInterface}) through the same connection, so inside a
- * transaction the record commits or rolls back with the data. It is removed
- * only when Trident acknowledges it ({@see TridentClient::deliverTags()}: a
- * 200 with the engine's purge schema). A 401, 429, 5xx, timeout or dead
- * process leaves it in the outbox, and the next drain — the next commit, or
- * the cron job — sends it again. Purges are idempotent, so a duplicate after
- * a crash between "sent" and "removed" costs one extra purge, never a lost one.
+ * transaction the record commits or rolls back with the data. Delivery is
+ * qoliber/trident-php's {@see Drainer}: requests of at most 1000 tags, each
+ * row removed only when Trident acknowledges it ({@see Acknowledgement}: a
+ * 200 with the engine's purge schema, or Reflect mode's 202 `recorded`), a
+ * backoff per row, and an instance left for the next drain after three
+ * consecutive failures. A 401, 429, 5xx, timeout or dead process leaves the
+ * row, and the next drain — the next commit, or the cron job — sends it
+ * again. Purges are idempotent, so a duplicate after a crash between "sent"
+ * and "removed" costs one extra purge, never a lost one.
+ *
+ * Why not the library's {@see Purger}: it remembers what this process
+ * recorded to skip duplicates, and a rolled-back transaction takes the rows
+ * with it while that memory stays — a retried save would then record
+ * nothing. Magento's transactions make the dedupe unnecessary anyway: every
+ * row is invisible to other drainers until its save committed.
  *
  * X03 — several instances. A purge is recorded once per instance and each
  * record is acknowledged, backed off and retried on its own: an edge that is
@@ -61,23 +79,8 @@ use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
  */
 class PurgeAfterCommit
 {
-    /**
-     * Tags per request. Trident's admin API refuses a body over
-     * `max_body_size` (1 MiB by default) with 413 — so a large transaction
-     * merged into one request would be refused whole. 1000 tags is a few
-     * dozen KiB.
-     */
-    private const MAX_TAGS_PER_REQUEST = 1000;
-
     /** Entries a drain looks at from a request thread. */
-    private const REQUEST_DRAIN_LIMIT = 50;
-
-    /**
-     * Consecutive failed deliveries after which a drain stops: an edge that
-     * is down is not waited out N times from a storefront request. The
-     * entries stay; the next drain (or cron) retries them.
-     */
-    private const MAX_CONSECUTIVE_FAILURES = 3;
+    private const REQUEST_DRAIN_LIMIT = Purger::REQUEST_DRAIN_LIMIT;
 
     /**
      * Fallback only — used when the outbox cannot be written (the module was
@@ -111,15 +114,19 @@ class PurgeAfterCommit
 
     /**
      * @param ResourceConnection $resourceConnection
-     * @param TridentClient $tridentClient
      * @param PurgeOutboxInterface $outbox
+     * @param Config $config
+     * @param Transport $transport
      * @param LoggerInterface $logger
+     * @param Clock $clock
      */
     public function __construct(
         private readonly ResourceConnection $resourceConnection,
-        private readonly TridentClient $tridentClient,
         private readonly PurgeOutboxInterface $outbox,
-        private readonly LoggerInterface $logger
+        private readonly Config $config,
+        private readonly Transport $transport,
+        private readonly LoggerInterface $logger,
+        private readonly Clock $clock
     ) {
     }
 
@@ -132,14 +139,16 @@ class PurgeAfterCommit
      */
     public function purgeTags(array $tags): void
     {
-        if ($tags === []) {
+        $tags = array_values(array_map('strval', $tags));
+        if ($tags === [] || !$this->configured()) {
             return;
         }
-        $tags = array_values(array_map('strval', $tags));
         try {
-            foreach ($this->instanceNames() as $instance) {
-                foreach (array_chunk($tags, self::MAX_TAGS_PER_REQUEST) as $chunk) {
-                    $this->outbox->enqueue(OutboxEntry::KIND_TAGS, $chunk, $instance);
+            $now = $this->clock->now();
+            foreach ($this->config->getInstances() as $instance) {
+                foreach (Packer::chunk($tags) as $chunk) {
+                    // Due at once: until the save commits, nobody else sees it.
+                    $this->outbox->record($instance->name, $chunk, $now, $now);
                 }
             }
         } catch (\Throwable $e) {
@@ -222,14 +231,18 @@ class PurgeAfterCommit
     {
         // A full clear covers every config tag still held for the reload.
         $this->pendingConfigTags = [];
+        if (!$this->configured()) {
+            return;
+        }
         try {
-            foreach ($this->instanceNames() as $instance) {
-                $this->outbox->enqueue(OutboxEntry::KIND_ALL, [], $instance);
+            $now = $this->clock->now();
+            foreach ($this->config->getInstances() as $instance) {
+                $this->outbox->recordClear($instance->name, $now);
             }
         } catch (\Throwable $e) {
             $this->outboxUnavailable($e);
             if (!$this->inTransaction()) {
-                $this->tridentClient->deliverAll();
+                $this->clearDirect();
                 return;
             }
             $this->pendingAll = true;
@@ -250,7 +263,7 @@ class PurgeAfterCommit
         if ($this->pendingAll) {
             $this->pendingAll = false;
             $this->pendingTags = [];
-            $this->tridentClient->deliverAll();
+            $this->clearDirect();
         } elseif ($this->pendingTags !== []) {
             $tags = array_map('strval', array_keys($this->pendingTags));
             $this->pendingTags = [];
@@ -269,11 +282,9 @@ class PurgeAfterCommit
      * be purged. An entry not read here is simply delivered later (one
      * redundant purge, never a lost one).
      *
-     * Remaining tag entries are merged into requests of at most 1000 unique
-     * tags, oldest first; an acknowledged request removes exactly the entries
-     * it carried.
+     * The tag entries then go to the library's {@see Drainer}.
      *
-     * @param int $limit Entries to read.
+     * @param int $limit Entries of each kind to read.
      * @param bool $ignoreBackoff Deliver entries still in backoff too — an
      *        operator's "deliver now" after fixing the cause (a token, an
      *        outage) must not wait out a retry schedule.
@@ -285,136 +296,111 @@ class PurgeAfterCommit
             return 0;
         }
         $instances = [];
-        foreach ($this->tridentClient->instances() as $instance) {
+        foreach ($this->config->getInstances() as $instance) {
             $instances[$instance->name] = $instance;
         }
+        if ($instances === []) {
+            return 0;
+        }
+        $names = array_map('strval', array_keys($instances));
+        $now = $this->clock->now();
         try {
+            // X03: a row written before instances existed is owed to every one.
+            $this->outbox->splitLegacy($limit, $names);
             // Only instances that are still configured: a row owed to one
             // that was removed must not take the drain's slots forever.
-            $entries = $this->outbox->due($limit, $ignoreBackoff, array_keys($instances));
+            $clears = $this->outbox->dueClears($limit, $now, $ignoreBackoff, $names);
+            $tags = $this->outbox->due($limit, $now, $ignoreBackoff, $names);
         } catch (\Throwable $e) {
             $this->outboxUnavailable($e);
             return 0;
         }
-        if ($entries === []) {
-            return 0;
-        }
 
-        // X03: a row written before instances existed is owed to every one.
-        // Only this batch's are split — the work stays bounded by $limit even
-        // when X02 left thousands behind — and they keep their age, attempts
-        // and backoff. The copies go out with the next drain.
-        $legacy = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->instance === null));
-        if ($legacy !== []) {
-            try {
-                $this->outbox->splitAmong(
-                    array_map(fn (OutboxEntry $e): int => $e->id, $legacy),
-                    array_map('strval', array_keys($instances))
-                );
-            } catch (\Throwable $e) {
-                $this->outboxUnavailable($e);
-                return 0;
-            }
-            $entries = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->instance !== null));
-        }
-
-        $byInstance = [];
-        foreach ($entries as $entry) {
-            if (!isset($instances[(string) $entry->instance])) {
-                // due() matched it, so only a name differing in a way SQL
-                // ignores gets here. Never hand it to the wrong instance.
-                $this->logger->warning('Trident purge owed to an unknown instance skipped', [
-                    'instance' => $entry->instance,
-                    'id' => $entry->id,
-                ]);
-                continue;
-            }
-            $byInstance[(string) $entry->instance][] = $entry;
-        }
         $removed = 0;
-        foreach ($byInstance as $name => $owed) {
-            $removed += $this->deliver($this->tridentClient->forInstance($instances[$name]), $owed);
+        $clearsByInstance = [];
+        foreach ($clears as $entry) {
+            $clearsByInstance[$entry->instance][] = $entry;
         }
-        return $removed;
-    }
-
-    /**
-     * Deliver one instance's due entries; see {@see drain()}.
-     *
-     * @param TridentClient $client Bound to the instance.
-     * @param array<int, OutboxEntry> $entries
-     * @return int Entries removed.
-     */
-    private function deliver(TridentClient $client, array $entries): int
-    {
-        $removed = 0;
-        $failures = 0;
-        $clears = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->kind === OutboxEntry::KIND_ALL));
-        if ($clears !== []) {
-            $last = end($clears);
-            $covered = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->id <= $last->id));
-            $ids = array_map(fn (OutboxEntry $e): int => $e->id, $covered);
-            if ($client->deliverAll()) {
+        foreach ($clearsByInstance as $name => $owed) {
+            $last = max(array_map(fn (OutboxEntry $e): int => $e->id, $owed));
+            $covered = array_values(array_filter(
+                $tags,
+                fn (OutboxEntry $e): bool => $e->instance === $name && $e->id <= $last
+            ));
+            $attempt = $this->clear($instances[$name]);
+            if ($attempt->acknowledged()) {
+                $ids = array_map(fn (OutboxEntry $e): int => $e->id, [...$owed, ...$covered]);
                 $this->outbox->remove($ids);
                 $removed += count($ids);
             } else {
-                $this->outbox->fail(array_map(fn (OutboxEntry $e): int => $e->id, $clears), $this->failureReason($client));
-                $failures++;
+                $this->outbox->fail($owed, (string) $attempt->failure, $now);
+                $this->notAcknowledged((string) $name, 'cache_clear', (string) $attempt->failure);
             }
-            $entries = array_values(array_filter($entries, fn (OutboxEntry $e): bool => $e->id > $last->id));
+            // Covered rows ride on the clear: removed with it, or kept for the
+            // clear's retry. An instance that did not answer at all is not
+            // tried again in this drain.
+            $tags = array_values(array_filter(
+                $tags,
+                fn (OutboxEntry $e): bool => $e->instance !== $name
+                    || ($e->id > $last && !$attempt->unreachable)
+            ));
         }
 
-        foreach ($this->pack($entries) as [$ids, $tags]) {
-            if ($failures >= self::MAX_CONSECUTIVE_FAILURES) {
-                break;
-            }
-            if ($client->deliverTags($tags)) {
-                $this->outbox->remove($ids);
-                $removed += count($ids);
-                $failures = 0;
-            } else {
-                $this->outbox->fail($ids, $this->failureReason($client));
-                $failures++;
+        $report = (new Drainer(
+            $this->outbox,
+            array_values($instances),
+            fn (Instance $instance): PurgeClient => new PurgeClient($instance, $this->transport),
+            $this->mode()
+        ))->deliverEntries($tags, $now);
+        foreach ($report->instances as $name => $result) {
+            if ($result['error'] !== null) {
+                $this->notAcknowledged($name, 'purge_tags', $result['error']);
             }
         }
-        return $removed;
+
+        return $removed + $report->delivered;
     }
 
     /**
-     * X03: the instances a new purge is owed to.
+     * POST /admin/cache/clear on one instance, judged by the library's
+     * {@see Acknowledgement::clearFailure()}.
      *
-     * @return array<int, string>
+     * @param Instance $instance
+     * @return PurgeAttempt
      */
-    private function instanceNames(): array
+    private function clear(Instance $instance): PurgeAttempt
     {
-        return array_map(fn (Instance $i): string => $i->name, $this->tridentClient->instances());
+        $response = $this->transport->request(
+            'POST',
+            $instance->apiUrl . '/admin/cache/clear',
+            Api::headers($instance),
+            (string) json_encode(['confirm' => true])
+        );
+        if ($response['status'] === 0) {
+            $error = (string) ($response['error'] ?? '');
+            return new PurgeAttempt('no response' . ($error !== '' ? ' — ' . $error : ''), true);
+        }
+        return new PurgeAttempt(Acknowledgement::clearFailure($response['status'], $response['body']));
     }
 
     /**
-     * Merge tag entries, in order, into requests of at most 1000 unique tags.
-     *
-     * @param array<int, OutboxEntry> $entries
-     * @return array<int, array{0: array<int>, 1: array<string>}>
+     * @return string soft|hard
      */
-    private function pack(array $entries): array
+    private function mode(): string
     {
-        $requests = [];
-        $ids = [];
-        $tags = [];
-        foreach ($entries as $entry) {
-            $merged = $tags + array_fill_keys($entry->tags, true);
-            if ($ids !== [] && count($merged) > self::MAX_TAGS_PER_REQUEST) {
-                $requests[] = [$ids, array_map('strval', array_keys($tags))];
-                $ids = [];
-                $merged = array_fill_keys($entry->tags, true);
-            }
-            $ids[] = $entry->id;
-            $tags = $merged;
-        }
-        if ($ids !== []) {
-            $requests[] = [$ids, array_map('strval', array_keys($tags))];
-        }
-        return $requests;
+        return $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard';
+    }
+
+    /**
+     * Whether purges can go anywhere: Trident is the FPC application and an
+     * instance is configured. Recording rows nobody can deliver would only
+     * grow the table.
+     *
+     * @return bool
+     */
+    private function configured(): bool
+    {
+        return $this->config->isTridentEnabled() && $this->config->getInstances() !== [];
     }
 
     /**
@@ -439,18 +425,45 @@ class PurgeAfterCommit
      */
     private function sendDirect(array $tags): void
     {
-        foreach (array_chunk($tags, self::MAX_TAGS_PER_REQUEST) as $chunk) {
-            $this->tridentClient->deliverTags($chunk);
+        foreach ($this->config->getInstances() as $instance) {
+            $client = new PurgeClient($instance, $this->transport);
+            foreach (Packer::chunk($tags) as $chunk) {
+                $attempt = $client->purgeTags($chunk, $this->mode());
+                if (!$attempt->acknowledged()) {
+                    $this->notAcknowledged($instance->name, 'purge_tags', (string) $attempt->failure);
+                }
+            }
         }
     }
 
     /**
-     * @param TridentClient $client
-     * @return string
+     * Fallback full clear (no outbox): best effort, as before X02.
+     *
+     * @return void
      */
-    private function failureReason(TridentClient $client): string
+    private function clearDirect(): void
     {
-        return $client->lastFailure() ?? 'not acknowledged';
+        foreach ($this->config->getInstances() as $instance) {
+            $attempt = $this->clear($instance);
+            if (!$attempt->acknowledged()) {
+                $this->notAcknowledged($instance->name, 'cache_clear', (string) $attempt->failure);
+            }
+        }
+    }
+
+    /**
+     * @param string $instance
+     * @param string $context
+     * @param string $failure
+     * @return void
+     */
+    private function notAcknowledged(string $instance, string $context, string $failure): void
+    {
+        $this->logger->error('Trident did not acknowledge the request', [
+            'instance' => $instance,
+            'context' => $context,
+            'error' => $failure,
+        ]);
     }
 
     /**
