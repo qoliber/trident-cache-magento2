@@ -372,7 +372,7 @@ class TridentClientTest extends TestCase
         $client = $this->client();
 
         $this->assertNull($client->warmerRun());
-        $this->assertSame('admin API: HTTP 404: The cache warmer is not enabled', $client->lastFailure());
+        $this->assertSame('POST /admin/warmer/run: HTTP 404: The cache warmer is not enabled', $client->lastFailure());
     }
 
     public function testAnUnauthorizedReadIsNullAndSaysSo(): void
@@ -633,14 +633,14 @@ class TridentClientTest extends TestCase
         $client->denoiserQueryUnpin('utm_x');
         $client->denoiserPathReset();
 
-        $sent = array_map(fn (array $r): array => [$r['method'], $r['url'], self::json($r['body'])], $this->http->requests);
+        $sent = array_map(fn (array $r): array => [$r['method'], $r['url'], $r['body']], $this->http->requests);
         $this->assertSame([
-            ['GET', 'http://edge-1:9301/admin/reflect/status', []],
-            ['POST', 'http://edge-1:9301/admin/reflect/enable', ['level' => 'selective', 'duration' => '10m', 'reason' => 'deploy']],
-            ['POST', 'http://edge-1:9301/admin/cache/coverage', ['urls' => ['/a.html'], 'host' => 'shop.example', 'scheme' => 'https']],
-            ['POST', 'http://edge-1:9301/admin/denoisers/query/unpin', ['param' => 'utm_x', 'host' => '*', 'path_prefix' => '/']],
-            ['POST', 'http://edge-1:9301/admin/denoisers/path/reset', []],
-        ], $sent);
+            ['GET', 'http://edge-1:9301/admin/reflect/status', null],
+            ['POST', 'http://edge-1:9301/admin/reflect/enable', '{"level":"selective","duration":"10m","reason":"deploy"}'],
+            ['POST', 'http://edge-1:9301/admin/cache/coverage', '{"urls":["\\/a.html"],"scheme":"https","method":"GET","host":"shop.example"}'],
+            ['POST', 'http://edge-1:9301/admin/denoisers/query/unpin', '{"param":"utm_x","host":"*","path_prefix":"\\/"}'],
+            ['POST', 'http://edge-1:9301/admin/denoisers/path/reset', null],
+        ], $sent, 'a GET and a bare POST carry no body at all — not {} or []');
     }
 
     public function testATagPatternPurgeIsExplicitAboutItsMode(): void
@@ -668,5 +668,55 @@ class TridentClientTest extends TestCase
         $down = $client->clear($this->instances[1]);
         $this->assertFalse($down->acknowledged());
         $this->assertTrue($down->unreachable);
+    }
+
+    /**
+     * Review: the coverage method (the engine's CacheCoverageRequest.method)
+     * was dropped, so every check looked at GET entries.
+     */
+    public function testCoverageSendsTheMethod(): void
+    {
+        $this->http->answer('edge-1', 200, '{"coverage_percent":50}');
+        $this->client()->cacheCoverage(['/a.html'], null, 'https', 'HEAD');
+
+        $this->assertSame(['urls' => ['/a.html'], 'scheme' => 'https', 'method' => 'HEAD'], self::json($this->only()['body']));
+    }
+
+    /**
+     * Review: a bound client for an instance without a token said "disabled"
+     * with no reason, and logged the global "purges and admin calls are
+     * disabled" warning while the other instances worked.
+     */
+    public function testABoundClientWithoutATokenSaysWhichInstanceAndWarnsNoOneElse(): void
+    {
+        $this->instances = [
+            new Instance('edge-1', 'http://edge-1:9301', 'token-1'),
+            new Instance('edge-2', 'http://edge-2:9301', ''),
+        ];
+        $logger = new class extends \Psr\Log\AbstractLogger {
+            /** @var list<string> */
+            public array $warnings = [];
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                if ($level === 'warning') {
+                    $this->warnings[] = (string) $message;
+                }
+            }
+        };
+        $config = $this->createMock(Config::class);
+        $config->method('isTridentEnabled')->willReturn(true);
+        $config->method('getInstances')->willReturnCallback(fn (): array => $this->instances);
+        // The warning is logged once per process: start from "not yet".
+        (new \ReflectionProperty(TridentClient::class, 'tokenMissingLogged'))->setValue(null, false);
+        $bound = (new TridentClient($this->http, $logger, $config))->forInstance($this->instances[1]);
+
+        $this->assertFalse($bound->isEnabled());
+        $this->assertNull($bound->getStats());
+        $this->assertSame('instance "edge-2" has no API token', $bound->lastFailure());
+        $this->assertNull($bound->purgeTags(['cat_p_1']));
+        $this->assertSame('instance "edge-2" has no API token', $bound->lastFailure());
+        $this->assertSame([], $logger->warnings);
+        $this->assertSame([], $this->http->requests);
     }
 }

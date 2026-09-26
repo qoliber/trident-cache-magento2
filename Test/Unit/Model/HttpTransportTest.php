@@ -6,18 +6,37 @@ namespace Qoliber\TridentCache\Test\Unit\Model;
 
 use PHPUnit\Framework\TestCase;
 use Qoliber\TridentCache\Model\HttpTransport;
+use Qoliber\TridentCache\Test\Unit\Model\Fake\LocalServer;
 
 /**
- * Review #7: the proxy is what libcurl (and so the module before) used — the
- * lowercase variables — never Guzzle's uppercase ones, which under CGI can be
- * set by a request header ("httpoxy") and would route the admin token away.
+ * Proxy: libcurl's own rules, as the module had through Magento's Curl — so
+ * lowercase `http_proxy` is used and uppercase `HTTP_PROXY` (httpoxy) is not.
+ * Real requests to a local server: that lowercase `http_proxy` takes effect at
+ * all shows the request went through libcurl (Guzzle's stream handler ignores
+ * the environment), and that `HTTP_PROXY` does not shows Guzzle added no proxy
+ * of its own.
  */
 class HttpTransportTest extends TestCase
 {
-    private const VARIABLES = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'];
+    private const VARIABLES = ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy'];
+
+    /** A proxy that refuses every connection. */
+    private const DEAD_PROXY = 'http://127.0.0.1:9';
+
+    private static ?LocalServer $server = null;
 
     /** @var array<string, string|false> */
     private array $saved = [];
+
+    public static function setUpBeforeClass(): void
+    {
+        self::$server = new LocalServer();
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        self::$server = null;
+    }
 
     protected function setUp(): void
     {
@@ -34,31 +53,43 @@ class HttpTransportTest extends TestCase
         }
     }
 
-    public function testUppercaseProxyVariablesAreIgnored(): void
+    private function get(): int
     {
-        putenv('HTTP_PROXY=http://attacker:8080');
-        putenv('HTTPS_PROXY=http://attacker:8080');
-
-        $this->assertSame([], HttpTransport::proxy());
-        $this->assertSame([], (new HttpTransport())->options()['proxy'], 'explicit, so Guzzle adds none of its own');
+        return (new HttpTransport(3, 1))->request('GET', self::$server->url() . '/ok', [], null)['status'];
     }
 
-    public function testLowercaseProxyVariablesAreHonoured(): void
+    public function testWithoutAProxyTheRequestGoesStraightThrough(): void
     {
-        putenv('http_proxy=http://proxy:3128');
-        putenv('https_proxy=http://proxy:3129');
-        putenv('no_proxy=trident, localhost ,');
-
-        $this->assertSame(
-            ['http' => 'http://proxy:3128', 'https' => 'http://proxy:3129', 'no' => ['trident', 'localhost']],
-            HttpTransport::proxy()
-        );
+        $this->assertSame(200, $this->get());
     }
 
-    public function testTimeoutsAreConfigurable(): void
+    public function testUppercaseHttpProxyIsNotUsed(): void
+    {
+        putenv('HTTP_PROXY=' . self::DEAD_PROXY);
+
+        $this->assertSame(200, $this->get(), 'Guzzle would have sent it to the dead proxy');
+    }
+
+    public function testLowercaseHttpProxyIsUsed(): void
+    {
+        putenv('http_proxy=' . self::DEAD_PROXY);
+
+        $this->assertSame(0, $this->get(), 'libcurl honours http_proxy: the dead proxy refuses');
+    }
+
+    public function testNoProxyExemptsAHost(): void
+    {
+        putenv('http_proxy=' . self::DEAD_PROXY);
+        putenv('no_proxy=127.0.0.0/8');
+
+        $this->assertSame(200, $this->get(), 'libcurl matches no_proxy, CIDR included');
+    }
+
+    public function testGuzzleIsGivenNoProxyAndTheConfiguredTimeouts(): void
     {
         $options = (new HttpTransport(2, 1))->options();
 
+        $this->assertSame([], $options['proxy']);
         $this->assertSame([2.0, 1.0], [$options['timeout'], $options['connect_timeout']]);
     }
 }

@@ -13,6 +13,8 @@ declare(strict_types=1);
 namespace Qoliber\TridentCache\Model;
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Handler\CurlHandler;
+use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\HttpFactory;
 use Qoliber\Trident\Delivery\Psr18Transport;
 use Qoliber\Trident\Delivery\Transport;
@@ -65,45 +67,32 @@ class HttpTransport implements Transport
     }
 
     /**
-     * The Guzzle options of this transport (timeouts and proxy).
+     * The Guzzle options of this transport — also the base of the Live Events
+     * poll ({@see EventPoller}).
+     *
+     * Always libcurl ({@see CurlHandler}; Magento requires ext-curl), whatever
+     * `allow_url_fopen` says, so the module behaves one way everywhere.
+     *
+     * Proxy: libcurl's own rules, exactly what the module had through
+     * Magento's Curl client — lowercase `http_proxy`, `https_proxy` or
+     * `HTTPS_PROXY`, `all_proxy`/`ALL_PROXY`, and `no_proxy` with its
+     * domain and CIDR matching; never uppercase `HTTP_PROXY`, which under CGI
+     * a request's `Proxy:` header can set ("httpoxy"). `proxy` is set to an
+     * empty list because leaving it out is NOT neutral: Guzzle's Client then
+     * adds its own from `HTTP_PROXY` (in the CLI — cron, the drain command),
+     * `HTTPS_PROXY` and `NO_PROXY`, and passes it to libcurl as an explicit
+     * proxy. With an empty list Guzzle sets no proxy and libcurl decides.
      *
      * @return array<string, mixed>
      */
     public function options(): array
     {
         return [
+            'handler' => HandlerStack::create(new CurlHandler()),
             'timeout' => $this->timeout,
             'connect_timeout' => $this->connectTimeout,
-            'proxy' => self::proxy(),
+            'proxy' => [],
         ];
-    }
-
-    /**
-     * The proxy the module's requests may use: the lowercase `http_proxy`,
-     * `https_proxy` and `no_proxy` environment variables — what libcurl reads
-     * and what the module honoured before, through Magento's Curl client.
-     *
-     * Always set explicitly: left alone, Guzzle takes UPPERCASE `HTTP_PROXY`
-     * in the CLI and `HTTPS_PROXY` everywhere. Under CGI/FPM an uppercase
-     * variable can come from a request's `Proxy:` header ("httpoxy"), and the
-     * admin token must never go through a proxy nobody configured for it.
-     *
-     * @return array{http?: string, https?: string, no?: list<string>}
-     */
-    public static function proxy(): array
-    {
-        $proxy = [];
-        foreach (['http' => 'http_proxy', 'https' => 'https_proxy'] as $scheme => $variable) {
-            $value = trim((string) getenv($variable));
-            if ($value !== '') {
-                $proxy[$scheme] = $value;
-            }
-        }
-        $noProxy = trim((string) getenv('no_proxy'));
-        if ($noProxy !== '') {
-            $proxy['no'] = array_values(array_filter(array_map('trim', explode(',', $noProxy)), 'strlen'));
-        }
-        return $proxy;
     }
 
     /**

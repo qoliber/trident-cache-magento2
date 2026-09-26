@@ -72,11 +72,14 @@ carrying its own copy of the same code:
   of `*`, and `guzzlehttp/guzzle ^7.5` with `guzzlehttp/psr7 ^2.4` (its PSR-17
   factories). New packages on a Magento install: `qoliber/trident-php`,
   `psr/http-server-handler`, `psr/http-server-middleware`.
-- **Proxy**: requests honour the lowercase `http_proxy`, `https_proxy` and
-  `no_proxy` variables, like the libcurl path before — never the uppercase
-  `HTTP_PROXY` Guzzle would read (under CGI a request's `Proxy:` header can
-  set it, "httpoxy"), so the admin token cannot be routed through a proxy
-  nobody configured.
+- **Every request runs on libcurl** (Guzzle's curl handler; Magento requires
+  ext-curl), whatever `allow_url_fopen` says. The proxy is libcurl's own
+  choice, exactly as through Magento's Curl client before: lowercase
+  `http_proxy`, `https_proxy`/`HTTPS_PROXY`, `all_proxy`/`ALL_PROXY`, and
+  `no_proxy` (domains and CIDR ranges) — never uppercase `HTTP_PROXY`, which
+  under CGI a request's `Proxy:` header can set ("httpoxy"). Guzzle is told
+  to set no proxy of its own; left alone it would add one from `HTTP_PROXY`
+  in the CLI (cron, the drain command).
 
 ### Added — the Trident screens show every instance (X03)
 
@@ -99,10 +102,11 @@ carrying its own copy of the same code:
   failure, with the reason in the log.
 - **Live Events showed nothing.** The engine keeps an event stream open for as
   long as the client listens; Magento's `Curl` threw away what had arrived
-  when its 2-second timeout fired. A poll now listens for its window and keeps
-  what arrived — with or without `allow_url_fopen` (without it, the curl
-  handler cannot stream, so the poll ends on an overall timeout and reads what
-  was received) — from the selected instance.
+  when its 2-second timeout fired. A poll now listens for its window on
+  libcurl, then reads back what arrived from its own sink (complete events
+  only) — from the selected instance.
+- **Cache Coverage checked GET entries whatever method was asked**: the
+  `method` is now sent (the engine's `CacheCoverageRequest.method`).
 - **"Warm these URLs" warmed the configured sources instead.** The URL list
   was sent to `/admin/warmer/run`, which takes no body; it now goes to the
   warmer's queue.
@@ -125,7 +129,8 @@ because the library cannot yet do what the screens need:
   applies), and `purgeAll()` reads a clear's answer as a `PurgeResponse`.
   `PurgeClient` has no full clear, and its `PurgeAttempt` carries no answer
   (the counts the purge screens show).
-- `explain()` can send only the `host` header; the WAF export has no method.
+- `explain()` can send only the `host` header, `coverage()` cannot send the
+  method; the WAF export has no method.
 - Denoiser pins (not a library gap): the engine and the library's
   `denoiserQueryPin()`/`denoiserPathPin()` require `class` (query) or `status`
   (path), which this module's forms do not collect yet, so pinning fails

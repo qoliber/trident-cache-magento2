@@ -136,15 +136,18 @@ class TridentClient
         if (!$this->config->isTridentEnabled()) {
             return false;
         }
-        $instances = $this->instance !== null ? [$this->instance] : $this->instances();
+        if ($this->instance !== null) {
+            return $this->instance->apiToken !== '';
+        }
+        $instances = $this->instances();
         foreach ($instances as $instance) {
             if ($instance->apiToken !== '') {
                 return true;
             }
         }
         if ($instances !== [] && !self::$tokenMissingLogged) {
-            // An empty Bearer only earns 401s; say so once, whatever the
-            // debug setting.
+            // Not one instance can be asked: an empty Bearer only earns 401s.
+            // Say so once, whatever the debug setting.
             self::$tokenMissingLogged = true;
             $this->logger->warning(
                 'Trident FPC is enabled (engine 3) but no admin api_token is set — '
@@ -264,7 +267,7 @@ class TridentClient
      */
     public function getStatus(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->status());
+        return $this->read('GET /admin/status', fn (AdminClient $c): Payload => $c->status());
     }
 
     /**
@@ -281,7 +284,7 @@ class TridentClient
         if ($host !== '' && str_starts_with($url, '/')) {
             $url = 'http://' . $host . $url;
         }
-        return $this->read(fn (AdminClient $c): Payload => $c->explain($url, $method, $detail));
+        return $this->read('POST /admin/explain', fn (AdminClient $c): Payload => $c->explain($url, $method, $detail));
     }
 
     /**
@@ -383,7 +386,7 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function getWarmerStatus(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->warmerStatus());
+        return $this->read('GET /admin/warmer/status', fn (AdminClient $c): Payload => $c->warmerStatus());
     }
 
     /**
@@ -399,7 +402,7 @@ class TridentClient
         if ($urls !== []) {
             return $this->warmerQueue($urls);
         }
-        return $this->read(fn (AdminClient $c): Payload => $c->warmerRun());
+        return $this->read('POST /admin/warmer/run', fn (AdminClient $c): Payload => $c->warmerRun());
     }
 
     /**
@@ -408,13 +411,16 @@ class TridentClient
      */
     public function warmerQueue(array $urls): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->warmerQueue(array_values($urls)));
+        return $this->read(
+            'POST /admin/warmer/queue',
+            fn (AdminClient $c): Payload => $c->warmerQueue(array_values($urls))
+        );
     }
 
     /** @return array<string, mixed>|null */
     public function warmerCancel(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->warmerCancel());
+        return $this->read('POST /admin/warmer/cancel', fn (AdminClient $c): Payload => $c->warmerCancel());
     }
 
     // =========================================================================
@@ -422,8 +428,10 @@ class TridentClient
     // =========================================================================
 
     /**
-     * Batch cache-membership check: per-URL cached/not + aggregate percentage.
-     * `$method` is kept for compatibility; the engine checks GET entries.
+     * Batch cache-membership check: per-URL cached/not + aggregate percentage,
+     * for the entries of `$method` requests (the engine's
+     * CacheCoverageRequest.method). Through the library's Api: its typed
+     * coverage() cannot send the method.
      *
      * @param array<int, string> $urls
      * @return array<string, mixed>|null
@@ -434,11 +442,11 @@ class TridentClient
         string $scheme = 'https',
         string $method = 'GET'
     ): ?array {
-        return $this->read(fn (AdminClient $c): Payload => $c->coverage(
-            array_values($urls),
-            $host !== null && $host !== '' ? $host : null,
-            $scheme
-        ));
+        $data = ['urls' => array_values($urls), 'scheme' => $scheme, 'method' => $method];
+        if ($host !== null && $host !== '') {
+            $data['host'] = $host;
+        }
+        return $this->call('POST', '/admin/cache/coverage', [], $data);
     }
 
     // =========================================================================
@@ -448,7 +456,7 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function getLaunchStatus(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->launch());
+        return $this->read('GET /admin/launch/status', fn (AdminClient $c): Payload => $c->launch());
     }
 
     /**
@@ -480,13 +488,13 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function getReflectStatus(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->reflectStatus());
+        return $this->read('GET /admin/reflect/status', fn (AdminClient $c): Payload => $c->reflectStatus());
     }
 
     /** @return array<string, mixed>|null */
     public function getReflectQueue(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->reflectQueue());
+        return $this->read('GET /admin/reflect/queue', fn (AdminClient $c): Payload => $c->reflectQueue());
     }
 
     /**
@@ -495,7 +503,10 @@ class TridentClient
      */
     public function reflectEnable(string $level = 'full', ?string $duration = null, ?string $reason = null): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->reflectEnable($level, $duration, $reason));
+        return $this->read(
+            'POST /admin/reflect/enable',
+            fn (AdminClient $c): Payload => $c->reflectEnable($level, $duration, $reason)
+        );
     }
 
     /**
@@ -504,7 +515,7 @@ class TridentClient
      */
     public function reflectDisable(string $mode = 'replay'): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->reflectDisable($mode));
+        return $this->read('POST /admin/reflect/disable', fn (AdminClient $c): Payload => $c->reflectDisable($mode));
     }
 
     // =========================================================================
@@ -514,19 +525,22 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function getDenoiserReport(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->denoiserReport());
+        return $this->read('GET /admin/denoisers/report', fn (AdminClient $c): Payload => $c->denoiserReport());
     }
 
     /** @return array<string, mixed>|null */
     public function getDenoiserQueryScopes(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->denoiserQueryScopes());
+        return $this->read(
+            'GET /admin/denoisers/query/scopes',
+            fn (AdminClient $c): Payload => $c->denoiserQueryScopes()
+        );
     }
 
     /** @return array<string, mixed>|null */
     public function getDenoiserPathZones(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->denoiserPathZones());
+        return $this->read('GET /admin/denoisers/path/zones', fn (AdminClient $c): Payload => $c->denoiserPathZones());
     }
 
     /**
@@ -547,7 +561,7 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function denoiserQueryUnpin(string $param, ?string $pathPrefix = null): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->denoiserQueryUnpin(
+        return $this->read('POST /admin/denoisers/query/unpin', fn (AdminClient $c): Payload => $c->denoiserQueryUnpin(
             $param,
             '*',
             $pathPrefix !== null && $pathPrefix !== '' ? $pathPrefix : '/'
@@ -557,7 +571,10 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function denoiserQueryReset(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->denoiserReset('query'));
+        return $this->read(
+            'POST /admin/denoisers/query/reset',
+            fn (AdminClient $c): Payload => $c->denoiserReset('query')
+        );
     }
 
     /**
@@ -574,13 +591,19 @@ class TridentClient
     /** @return array<string, mixed>|null */
     public function denoiserPathUnpin(string $host, string $pathPrefix): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->denoiserPathUnpin($host, $pathPrefix));
+        return $this->read(
+            'POST /admin/denoisers/path/unpin',
+            fn (AdminClient $c): Payload => $c->denoiserPathUnpin($host, $pathPrefix)
+        );
     }
 
     /** @return array<string, mixed>|null */
     public function denoiserPathReset(): ?array
     {
-        return $this->read(fn (AdminClient $c): Payload => $c->denoiserReset('path'));
+        return $this->read(
+            'POST /admin/denoisers/path/reset',
+            fn (AdminClient $c): Payload => $c->denoiserReset('path')
+        );
     }
 
     /** @return array<string, mixed>|null */
@@ -820,7 +843,7 @@ class TridentClient
      */
     private function ready(): ?Instance
     {
-        if (!$this->isEnabled()) {
+        if (!$this->config->isTridentEnabled()) {
             return null;
         }
         $target = $this->target();
@@ -828,17 +851,18 @@ class TridentClient
             $this->lastFailure = sprintf('instance "%s" has no API token', $target->name);
             return null;
         }
-        return $target;
+        return $target !== null && $this->isEnabled() ? $target : null;
     }
 
     /**
      * A call of the library's typed client on the target instance: its raw
      * answer, or null with the reason.
      *
+     * @param string $request Method and path, for the log and lastFailure().
      * @param callable(AdminClient): Payload $call
      * @return array<string, mixed>|null
      */
-    private function read(callable $call): ?array
+    private function read(string $request, callable $call): ?array
     {
         $target = $this->ready();
         if ($target === null) {
@@ -847,7 +871,7 @@ class TridentClient
         try {
             $data = $call(AdminClient::forInstance($target, $this->transport, $this->logger))->all();
         } catch (\Throwable $e) {
-            return $this->failed($target, 'admin API', $e);
+            return $this->failed($target, $request, $e);
         }
         $this->lastFailure = null;
         return $data;
