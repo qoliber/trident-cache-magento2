@@ -12,53 +12,79 @@ declare(strict_types=1);
 
 namespace Qoliber\TridentCache\Model;
 
-use Magento\Framework\HTTP\Client\Curl;
 use Psr\Log\LoggerInterface;
+use Qoliber\Trident\Admin\Api;
+use Qoliber\Trident\Admin\ApiError;
+use Qoliber\Trident\Admin\Fleet;
+use Qoliber\Trident\Admin\Payload;
+use Qoliber\Trident\Client\TridentClient as AdminClient;
+use Qoliber\Trident\Delivery\Acknowledgement;
+use Qoliber\Trident\Delivery\Instance;
+use Qoliber\Trident\Delivery\PurgeAttempt;
+use Qoliber\Trident\Delivery\PurgeClient;
+use Qoliber\Trident\Delivery\Transport;
+use Qoliber\Trident\Exception\TridentException;
+use Qoliber\TridentCache\Model\Admin\InstanceSelection;
 
+/**
+ * The admin API of the store's Trident instances, as the module's screens,
+ * plugins and observers use it: decoded JSON arrays, or null when there is no
+ * answer to show (the reason in {@see lastFailure()} and the log).
+ *
+ * A thin adapter over qoliber/trident-php, keeping the module's public
+ * methods so controllers and templates do not change:
+ *
+ * - reads and actions the library returns raw ({@see Payload}) are its typed
+ *   {@see AdminClient}'s;
+ * - invalidations on several instances run through its {@see Fleet};
+ * - purges and clears are judged by its {@see Acknowledgement};
+ * - the remaining endpoints go through its {@see Api} request path, because
+ *   the typed client's answers for them are normalised objects that drop
+ *   fields the screens show (see the library gaps in CHANGELOG 1.8.0).
+ *
+ * X03: invalidations go to every instance; everything else (dashboard reads,
+ * the warmer, launch, reflect, bans …) to one — the instance the admin chose
+ * with the switcher on the Trident screens ({@see InstanceSelection}),
+ * otherwise the first. A client bound with {@see forInstance()} is always
+ * that one instance.
+ */
 class TridentClient
 {
-    /** Total request timeout (seconds) — guards against a wedged Trident admin port. */
-    private const REQUEST_TIMEOUT = 10;
-
-    /** Connection-establishment timeout (seconds). */
-    private const CONNECT_TIMEOUT = 5;
-
-    /** X02: why the last purge was not acknowledged; null after a success. */
+    /** Why the last request was not acknowledged or answered; null after a success. */
     private ?string $lastFailure = null;
 
     /** Emit the "engine 3 but no token" warning at most once per PHP request. */
     private static bool $tokenMissingLogged = false;
 
+    /** Null — as injected — means "the store's instances"; see the class comment. */
+    private ?Instance $instance = null;
+
+    /**
+     * @param Transport $transport
+     * @param LoggerInterface $logger
+     * @param Config $config
+     * @param InstanceSelection|null $selection The admin's chosen instance (a proxy: read only in the admin).
+     */
     public function __construct(
-        private readonly Curl $curl,
+        private readonly Transport $transport,
         private readonly LoggerInterface $logger,
-        private readonly Config $config
+        private readonly Config $config,
+        private readonly ?InstanceSelection $selection = null
     ) {
     }
 
     /**
-     * X03: the instance this client talks to. Null — as injected — means
-     * "the store's instances": invalidations go to every one of them, and
-     * everything else (dashboard reads, the warmer, launch, reflect …) to the
-     * first. A bound client is always one instance.
-     */
-    private ?Instance $instance = null;
-
-    /**
      * X03: every Trident instance this store invalidates.
      *
-     * @return array<int, Instance>
+     * @return list<Instance>
      */
     public function instances(): array
     {
-        // Config never returns an empty list, but an empty list here would
-        // mean "purge nowhere" — so it is read as the admin setting instead.
-        return $this->config->getInstances()
-            ?: [new Instance(Config::DEFAULT_INSTANCE, $this->config->getApiUrl(), $this->config->getApiToken())];
+        return $this->config->getInstances();
     }
 
     /**
-     * X03: a client bound to one instance, sharing this one's Curl handle.
+     * X03: a client bound to one instance.
      *
      * @param Instance $instance
      * @return self
@@ -72,12 +98,690 @@ class TridentClient
     }
 
     /**
-     * @return Instance
+     * The instance a single-instance call from this client goes to.
+     *
+     * @return Instance|null Null only when no instance is configured at all.
      */
-    private function target(): Instance
+    public function target(): ?Instance
     {
-        return $this->instance ?? $this->instances()[0];
+        if ($this->instance !== null) {
+            return $this->instance;
+        }
+        $instances = $this->instances();
+        if ($instances === []) {
+            return null;
+        }
+        $selected = $this->selection?->selected();
+        if ($selected !== null) {
+            foreach ($instances as $instance) {
+                if ($instance->name === $selected) {
+                    return $instance;
+                }
+            }
+        }
+        return $instances[0];
     }
+
+    /**
+     * Whether Trident is the store's cache and can be talked to: an instance
+     * with an admin token is configured. A bound client asks about its own
+     * instance; otherwise ANY configured instance counts — never the one the
+     * admin switcher shows, or choosing an instance without a token would
+     * switch off every purge the admin triggers (cache flush, cache clean).
+     *
+     * @return bool
+     */
+    public function isEnabled(): bool
+    {
+        if (!$this->config->isTridentEnabled()) {
+            return false;
+        }
+        if ($this->instance !== null) {
+            return $this->instance->apiToken !== '';
+        }
+        $instances = $this->instances();
+        foreach ($instances as $instance) {
+            if ($instance->apiToken !== '') {
+                return true;
+            }
+        }
+        if ($instances !== [] && !self::$tokenMissingLogged) {
+            // Not one instance can be asked: an empty Bearer only earns 401s.
+            // Say so once, whatever the debug setting.
+            self::$tokenMissingLogged = true;
+            $this->logger->warning(
+                'Trident FPC is enabled (engine 3) but no admin api_token is set — '
+                . 'purges and admin calls are disabled until a token is configured.'
+            );
+        }
+        return false;
+    }
+
+    /**
+     * Purge by tags. Returns Trident's acknowledgement, or null when the purge
+     * was not acknowledged.
+     *
+     * @param array<string> $tags
+     * @param array<string> $excludeTags
+     * @return array<string, mixed>|null
+     */
+    public function purgeTags(array $tags, array $excludeTags = []): ?array
+    {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeTags($tags, $excludeTags));
+        }
+        if (empty($tags)) {
+            return null;
+        }
+        $data = [
+            'tags' => array_values(array_unique(array_map('strval', $tags))),
+            'mode' => $this->config->getPurgeMode(),
+        ];
+        if (!empty($excludeTags)) {
+            $data['exclude_tags'] = array_values(array_unique($excludeTags));
+        }
+        return $this->invalidate('/admin/purge/tags', $data);
+    }
+
+    /**
+     * Clear the whole edge cache. Returns Trident's acknowledgement, or null
+     * when the clear was not acknowledged.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function purgeAll(): ?array
+    {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeAll());
+        }
+        return $this->invalidate('/admin/cache/clear', ['confirm' => true]);
+    }
+
+    /**
+     * X02: a full clear of one instance, as the outbox delivers it.
+     *
+     * @param Instance $instance
+     * @return PurgeAttempt
+     */
+    public function clear(Instance $instance): PurgeAttempt
+    {
+        return $this->send($instance, '/admin/cache/clear', ['confirm' => true])[0];
+    }
+
+    /**
+     * X02: the library's purge client for one instance, over this transport.
+     *
+     * @param Instance $instance
+     * @return PurgeClient
+     */
+    public function purgeClient(Instance $instance): PurgeClient
+    {
+        return new PurgeClient($instance, $this->transport);
+    }
+
+    /**
+     * X02: why the last request was not acknowledged or answered, or null.
+     *
+     * @return string|null
+     */
+    public function lastFailure(): ?string
+    {
+        return $this->lastFailure;
+    }
+
+    /**
+     * Get cache statistics
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getStats(): ?array
+    {
+        return $this->call('GET', '/admin/stats');
+    }
+
+    /**
+     * Get cache rules
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getRules(): ?array
+    {
+        return $this->call('GET', '/admin/rules');
+    }
+
+    /**
+     * Get Trident health status
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getHealth(): ?array
+    {
+        return $this->call('GET', '/admin/health');
+    }
+
+    /**
+     * Licence and degraded-mode status: GET /admin/status — `mode` is
+     * 'licensed' (caching active), 'degraded' (pass-through) or 'unknown'.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getStatus(): ?array
+    {
+        return $this->read('GET /admin/status', fn (AdminClient $c): Payload => $c->status());
+    }
+
+    /**
+     * Dry-run cacheability diagnostic: POST /admin/explain. A `host` header
+     * names the site of a path; other headers cannot be sent through the
+     * library (a gap listed in CHANGELOG 1.8.0).
+     *
+     * @param array<string, string> $headers
+     * @return array<string, mixed>|null
+     */
+    public function explain(string $method, string $url, array $headers = [], bool $detail = true): ?array
+    {
+        $host = array_change_key_case($headers)['host'] ?? '';
+        if ($host !== '' && str_starts_with($url, '/')) {
+            $url = 'http://' . $host . $url;
+        }
+        return $this->read('POST /admin/explain', fn (AdminClient $c): Payload => $c->explain($url, $method, $detail));
+    }
+
+    /**
+     * Get cache entries with optional filtering
+     *
+     * @param int $offset
+     * @param int $limit
+     * @param string|null $tag
+     * @param string $sort
+     * @return array<string, mixed>|null
+     */
+    public function getEntries(int $offset = 0, int $limit = 50, ?string $tag = null, string $sort = 'age'): ?array
+    {
+        return $this->call('GET', '/admin/cache/entries', [
+            'offset' => $offset,
+            'limit' => $limit,
+            'sort' => $sort,
+            'tag' => $tag !== '' ? $tag : null,
+        ]);
+    }
+
+    /**
+     * Get cache tags with optional prefix filtering
+     *
+     * @param int $offset
+     * @param int $limit
+     * @param string|null $prefix
+     * @param string $sort
+     * @return array<string, mixed>|null
+     */
+    public function getTags(int $offset = 0, int $limit = 100, ?string $prefix = null, string $sort = 'count'): ?array
+    {
+        return $this->call('GET', '/admin/cache/tags', [
+            'offset' => $offset,
+            'limit' => $limit,
+            'sort' => $sort,
+            'prefix' => $prefix !== '' ? $prefix : null,
+        ]);
+    }
+
+    /**
+     * Get top URLs by request count
+     *
+     * @param int $limit
+     * @param string $sort
+     * @return array<string, mixed>|null
+     */
+    public function getTopUrls(int $limit = 20, string $sort = 'requests'): ?array
+    {
+        return $this->call('GET', '/admin/stats/top', ['limit' => $limit, 'sort' => $sort]);
+    }
+
+    /**
+     * Purge a single URL from cache
+     *
+     * @param string $url
+     * @param string|null $host
+     * @return array<string, mixed>|null
+     */
+    public function purgeUrl(string $url, ?string $host = null): ?array
+    {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeUrl($url, $host));
+        }
+        if (empty($url)) {
+            return null;
+        }
+        $data = ['url' => $url, 'mode' => $this->config->getPurgeMode()];
+        if ($host !== null && $host !== '') {
+            $data['host'] = $host;
+        }
+        return $this->call('POST', '/admin/purge/url', [], $data);
+    }
+
+    /**
+     * Purge cache by URL pattern
+     *
+     * @param string $pattern
+     * @return array<string, mixed>|null
+     */
+    public function purgePattern(string $pattern): ?array
+    {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgePattern($pattern));
+        }
+        if (empty($pattern)) {
+            return null;
+        }
+        return $this->call('POST', '/admin/purge/urls', [], [
+            'pattern' => $pattern,
+            'mode' => $this->config->getPurgeMode(),
+        ]);
+    }
+
+    // =========================================================================
+    // Cache Warmer
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getWarmerStatus(): ?array
+    {
+        return $this->read('GET /admin/warmer/status', fn (AdminClient $c): Payload => $c->warmerStatus());
+    }
+
+    /**
+     * Warm the configured sources — or, given URLs, exactly those: the
+     * engine's run takes no body, so a URL list goes to the warmer's queue
+     * (before, the list was sent to /admin/warmer/run and silently ignored).
+     *
+     * @param array<int, string> $urls
+     * @return array<string, mixed>|null
+     */
+    public function warmerRun(array $urls = []): ?array
+    {
+        if ($urls !== []) {
+            return $this->warmerQueue($urls);
+        }
+        return $this->read('POST /admin/warmer/run', fn (AdminClient $c): Payload => $c->warmerRun());
+    }
+
+    /**
+     * @param array<int, string> $urls
+     * @return array<string, mixed>|null
+     */
+    public function warmerQueue(array $urls): ?array
+    {
+        return $this->read(
+            'POST /admin/warmer/queue',
+            fn (AdminClient $c): Payload => $c->warmerQueue(array_values($urls))
+        );
+    }
+
+    /** @return array<string, mixed>|null */
+    public function warmerCancel(): ?array
+    {
+        return $this->read('POST /admin/warmer/cancel', fn (AdminClient $c): Payload => $c->warmerCancel());
+    }
+
+    // =========================================================================
+    // Cache Coverage
+    // =========================================================================
+
+    /**
+     * Batch cache-membership check: per-URL cached/not + aggregate percentage,
+     * for the entries of `$method` requests (the engine's
+     * CacheCoverageRequest.method). Through the library's Api: its typed
+     * coverage() cannot send the method.
+     *
+     * @param array<int, string> $urls
+     * @return array<string, mixed>|null
+     */
+    public function cacheCoverage(
+        array $urls,
+        ?string $host = null,
+        string $scheme = 'https',
+        string $method = 'GET'
+    ): ?array {
+        $data = ['urls' => array_values($urls), 'scheme' => $scheme, 'method' => $method];
+        if ($host !== null && $host !== '') {
+            $data['host'] = $host;
+        }
+        return $this->call('POST', '/admin/cache/coverage', [], $data);
+    }
+
+    // =========================================================================
+    // Launch Mode
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getLaunchStatus(): ?array
+    {
+        return $this->read('GET /admin/launch/status', fn (AdminClient $c): Payload => $c->launch());
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>|null
+     */
+    public function launchStart(array $options = []): ?array
+    {
+        return $this->call('POST', '/admin/launch/start', [], $options);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function launchComplete(): ?array
+    {
+        return $this->call('POST', '/admin/launch/complete', [], []);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function launchAbort(?string $reason = null): ?array
+    {
+        $data = $reason !== null && $reason !== '' ? ['reason' => $reason] : [];
+        return $this->call('POST', '/admin/launch/abort', [], $data);
+    }
+
+    // =========================================================================
+    // Reflect Mode
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getReflectStatus(): ?array
+    {
+        return $this->read('GET /admin/reflect/status', fn (AdminClient $c): Payload => $c->reflectStatus());
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getReflectQueue(): ?array
+    {
+        return $this->read('GET /admin/reflect/queue', fn (AdminClient $c): Payload => $c->reflectQueue());
+    }
+
+    /**
+     * @param string $level full|selective|ttl_extension
+     * @return array<string, mixed>|null
+     */
+    public function reflectEnable(string $level = 'full', ?string $duration = null, ?string $reason = null): ?array
+    {
+        return $this->read(
+            'POST /admin/reflect/enable',
+            fn (AdminClient $c): Payload => $c->reflectEnable($level, $duration, $reason)
+        );
+    }
+
+    /**
+     * @param string $mode replay|hard
+     * @return array<string, mixed>|null
+     */
+    public function reflectDisable(string $mode = 'replay'): ?array
+    {
+        return $this->read('POST /admin/reflect/disable', fn (AdminClient $c): Payload => $c->reflectDisable($mode));
+    }
+
+    // =========================================================================
+    // Denoisers
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getDenoiserReport(): ?array
+    {
+        return $this->read('GET /admin/denoisers/report', fn (AdminClient $c): Payload => $c->denoiserReport());
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getDenoiserQueryScopes(): ?array
+    {
+        return $this->read(
+            'GET /admin/denoisers/query/scopes',
+            fn (AdminClient $c): Payload => $c->denoiserQueryScopes()
+        );
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getDenoiserPathZones(): ?array
+    {
+        return $this->read('GET /admin/denoisers/path/zones', fn (AdminClient $c): Payload => $c->denoiserPathZones());
+    }
+
+    /**
+     * The engine also requires `class` (noise|signal), which this screen does
+     * not collect yet — see "Known" in CHANGELOG 1.8.0.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function denoiserQueryPin(string $param, ?string $pathPrefix = null): ?array
+    {
+        $data = ['param' => $param];
+        if ($pathPrefix !== null && $pathPrefix !== '') {
+            $data['path_prefix'] = $pathPrefix;
+        }
+        return $this->call('POST', '/admin/denoisers/query/pin', [], $data);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserQueryUnpin(string $param, ?string $pathPrefix = null): ?array
+    {
+        return $this->read('POST /admin/denoisers/query/unpin', fn (AdminClient $c): Payload => $c->denoiserQueryUnpin(
+            $param,
+            '*',
+            $pathPrefix !== null && $pathPrefix !== '' ? $pathPrefix : '/'
+        ));
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserQueryReset(): ?array
+    {
+        return $this->read(
+            'POST /admin/denoisers/query/reset',
+            fn (AdminClient $c): Payload => $c->denoiserReset('query')
+        );
+    }
+
+    /**
+     * The engine also requires `status` (dead|alive), which this screen does
+     * not collect yet — see "Known" in CHANGELOG 1.8.0.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function denoiserPathPin(string $host, string $pathPrefix): ?array
+    {
+        return $this->call('POST', '/admin/denoisers/path/pin', [], ['host' => $host, 'path_prefix' => $pathPrefix]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserPathUnpin(string $host, string $pathPrefix): ?array
+    {
+        return $this->read(
+            'POST /admin/denoisers/path/unpin',
+            fn (AdminClient $c): Payload => $c->denoiserPathUnpin($host, $pathPrefix)
+        );
+    }
+
+    /** @return array<string, mixed>|null */
+    public function denoiserPathReset(): ?array
+    {
+        return $this->read(
+            'POST /admin/denoisers/path/reset',
+            fn (AdminClient $c): Payload => $c->denoiserReset('path')
+        );
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getDenoiserWafExport(): ?array
+    {
+        return $this->call('GET', '/admin/denoisers/export/waf');
+    }
+
+    // =========================================================================
+    // Bans (soft purge)
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getBans(): ?array
+    {
+        return $this->call('GET', '/admin/bans');
+    }
+
+    /**
+     * @param string $type url|tag|pattern|bulkurl|tags (Trident BanType enum)
+     * @return array<string, mixed>|null
+     */
+    public function createBan(string $pattern, string $type = 'url'): ?array
+    {
+        // X03: one instance only, like listing and deleting them — ban ids
+        // are per engine, so a ban created everywhere could be deleted from
+        // one instance and live on, unseen, on the others.
+        return $this->call('POST', '/admin/bans', [], ['pattern' => $pattern, 'type' => $type]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function deleteBan(string $id): ?array
+    {
+        return $this->call('DELETE', '/admin/bans/' . rawurlencode($id));
+    }
+
+    // =========================================================================
+    // Backends + connection pools
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getBackends(): ?array
+    {
+        return $this->call('GET', '/admin/backends');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getBackendDetail(string $name): ?array
+    {
+        return $this->call('GET', '/admin/backends/detail', ['name' => $name]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getConnections(): ?array
+    {
+        return $this->call('GET', '/admin/connections');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function drainBackend(string $name): ?array
+    {
+        return $this->call('POST', '/admin/backends/drain', [], ['name' => $name]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function restoreBackend(string $name): ?array
+    {
+        return $this->call('POST', '/admin/backends/restore', [], ['name' => $name]);
+    }
+
+    // =========================================================================
+    // DNS discovery
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getDiscovery(): ?array
+    {
+        return $this->call('GET', '/admin/discovery');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getDiscoveryDetail(string $name): ?array
+    {
+        return $this->call('GET', '/admin/discovery/detail', ['name' => $name]);
+    }
+
+    /**
+     * Force a DNS re-resolve for a single discovery target. Trident's
+     * /admin/discovery/refresh requires the backend `name` as a query param.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function refreshDiscovery(string $name): ?array
+    {
+        return $this->call('POST', '/admin/discovery/refresh', ['name' => $name], []);
+    }
+
+    // =========================================================================
+    // Extended statistics + memory
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function getLatencyStats(): ?array
+    {
+        return $this->call('GET', '/admin/stats/latency');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getErrorStats(int $limit = 20): ?array
+    {
+        return $this->call('GET', '/admin/stats/errors', ['limit' => $limit]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getProtectionStats(): ?array
+    {
+        return $this->call('GET', '/admin/stats/protection');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getMemory(): ?array
+    {
+        return $this->call('GET', '/admin/memory');
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getRefreshQueue(): ?array
+    {
+        return $this->call('GET', '/admin/refresh/queue');
+    }
+
+    // =========================================================================
+    // Extended purge (host / vary / tag pattern)
+    // =========================================================================
+
+    /** @return array<string, mixed>|null */
+    public function purgeHost(string $host): ?array
+    {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeHost($host));
+        }
+        return $this->call('POST', '/admin/purge/host', [], ['host' => $host, 'mode' => $this->config->getPurgeMode()]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function purgeVary(string $header, string $value): ?array
+    {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeVary($header, $value));
+        }
+        return $this->call('POST', '/admin/purge/vary', [], [
+            'header' => $header,
+            'value' => $value,
+            'mode' => $this->config->getPurgeMode(),
+        ]);
+    }
+
+    /**
+     * Tag-pattern purge: POST /admin/purge/tag/pattern — every entry whose
+     * tag matches a wildcard (default) or regex, e.g. `cat_c_*`.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function purgeTagPattern(string $pattern, bool $regex = false): ?array
+    {
+        if ($this->fansOut()) {
+            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeTagPattern($pattern, $regex));
+        }
+        return $this->call('POST', '/admin/purge/tag/pattern', [], [
+            'pattern' => $pattern,
+            'pattern_type' => $regex ? 'regex' : 'wildcard',
+            'mode' => $this->config->getPurgeMode(),
+        ]);
+    }
+
+    // =========================================================================
+    // Requests
+    // =========================================================================
 
     /**
      * Whether an invalidation from this client must go to several instances.
@@ -90,26 +794,28 @@ class TridentClient
     }
 
     /**
-     * X03: an invalidation on every instance. It counts as done only when
-     * every instance answered: a purge that reached edge-1 but not edge-2
-     * leaves edge-2 serving the old page, so it is reported as failed, with
-     * the instances that failed and why in {@see lastFailure()}. Counts
-     * (`purged`, `affected` …) are summed; per-instance answers are under
-     * `instances`.
+     * X03: an invalidation on every instance, through the library's Fleet. It
+     * counts as done only when every instance answered: a purge that reached
+     * edge-1 but not edge-2 leaves edge-2 serving the old page, so it is
+     * reported as failed, with the instances that failed and why in
+     * {@see lastFailure()}. Counts (`purged`, `affected` …) are summed;
+     * per-instance answers are under `instances`.
      *
      * @param callable(self): (array<string, mixed>|null) $call
      * @return array<string, mixed>|null
      */
     private function onEveryInstance(callable $call): ?array
     {
+        $fleet = new Fleet($this->instances(), $this->transport, $this->logger);
         $results = [];
         $failed = [];
-        foreach ($this->instances() as $instance) {
+        foreach ($fleet->each(function (AdminClient $admin, Instance $instance) use ($call): array {
             $client = $this->forInstance($instance);
-            $result = $call($client);
-            $results[$instance->name] = $result;
-            if ($result === null) {
-                $failed[] = $instance->name . ': ' . ($client->lastFailure() ?? 'no acknowledgement');
+            return $call($client) ?? throw new TridentException($client->lastFailure() ?? 'no acknowledgement');
+        }) as $result) {
+            $results[$result->name()] = $result->value;
+            if (!$result->isOk()) {
+                $failed[] = $result->name() . ': ' . $result->reason();
             }
         }
         if ($failed !== []) {
@@ -130,1114 +836,160 @@ class TridentClient
     }
 
     /**
-     * Prepare the shared Curl handle for a request: apply an explicit timeout and
-     * pin the HTTP verb, so state from a prior call (notably a DELETE's
-     * CURLOPT_CUSTOMREQUEST) cannot leak into this one.
+     * The instance a single-instance call goes to, when one can be made — with
+     * a token: an empty Bearer only earns a 401.
      *
-     * @param string $method GET|POST
+     * @return Instance|null
      */
-    private function prepareRequest(string $method): void
+    private function ready(): ?Instance
     {
-        $this->curl->setOptions([
-            CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT,
-            CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
-            CURLOPT_CUSTOMREQUEST => $method,
-        ]);
-    }
-
-    /**
-     * Surface a non-2xx admin response instead of silently swallowing it. Magento's
-     * Curl does not throw on an HTTP error status, so a 401 (bad/expired api_token)
-     * or 5xx would otherwise be lost.
-     */
-    private function logHttpError(string $context): void
-    {
-        $status = (int) $this->curl->getStatus();
-        if ($status >= 400) {
-            $this->logger->error('Trident admin request failed', [
-                'context' => $context,
-                'status' => $status,
-            ]);
-        }
-    }
-
-    public function isEnabled(): bool
-    {
-        // Require an API token: the admin API is Bearer-authenticated, so calling
-        // it without one just fires empty-Bearer 401s that are then swallowed into
-        // permanent stale content. Gate them out cleanly and surface a distinct,
-        // debug-independent warning once so the misconfiguration is visible.
-        if (!$this->config->isTridentEnabled() || empty($this->target()->apiUrl)) {
-            return false;
-        }
-        if ($this->target()->apiToken === '') {
-            if (!self::$tokenMissingLogged) {
-                self::$tokenMissingLogged = true;
-                $this->logger->warning(
-                    'Trident FPC is enabled (engine 3) but no admin api_token is set — '
-                    . 'purges and admin calls are disabled until a token is configured.'
-                );
-            }
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * Purge by tags. Returns Trident's acknowledgement, or null when the purge
-     * was not acknowledged (see {@see acknowledged()}).
-     *
-     * @param array<string> $tags
-     * @param array<string> $excludeTags
-     * @return array<string, mixed>|null
-     */
-    public function purgeTags(array $tags, array $excludeTags = []): ?array
-    {
-        if ($this->fansOut()) {
-            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeTags($tags, $excludeTags));
-        }
-
-        if (!$this->isEnabled() || empty($tags)) {
+        if (!$this->config->isTridentEnabled()) {
             return null;
         }
-
-        $data = [
-            'tags' => array_values(array_unique($tags)),
-            'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
-        ];
-        if (!empty($excludeTags)) {
-            $data['exclude_tags'] = array_values(array_unique($excludeTags));
+        $target = $this->target();
+        if ($target !== null && $target->apiToken === '') {
+            $this->lastFailure = sprintf('instance "%s" has no API token', $target->name);
+            return null;
         }
+        return $target !== null && $this->isEnabled() ? $target : null;
+    }
 
+    /**
+     * A call of the library's typed client on the target instance: its raw
+     * answer, or null with the reason.
+     *
+     * @param string $request Method and path, for the log and lastFailure().
+     * @param callable(AdminClient): Payload $call
+     * @return array<string, mixed>|null
+     */
+    private function read(string $request, callable $call): ?array
+    {
+        $target = $this->ready();
+        if ($target === null) {
+            return null;
+        }
         try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-                'Content-Type' => 'application/json',
-            ]);
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('POST');
-            $this->curl->post($apiUrl . '/admin/purge/tags', (string) json_encode($data));
-            $result = $this->acknowledged('purge_tags', self::isPurgeAck(...));
-
-            if ($this->config->isDebugEnabled()) {
-                $this->logger->info('Trident cache purge', [
-                    'tags' => $tags,
-                    'exclude_tags' => $excludeTags,
-                    'mode' => $data['mode'],
-                    'result' => $result,
-                ]);
-            }
-
-            return $result;
-        } catch (\Exception $e) {
-            $this->lastFailure = 'purge_tags: ' . $e->getMessage();
-            $this->logger->error('Trident cache purge failed', [
-                'tags' => $tags,
-                'error' => $e->getMessage(),
-            ]);
-            return null;
+            $data = $call(AdminClient::forInstance($target, $this->transport, $this->logger))->all();
+        } catch (\Throwable $e) {
+            return $this->failed($target, $request, $e);
         }
+        $this->lastFailure = null;
+        return $data;
     }
 
     /**
-     * X02: whether Trident acknowledged a purge of `$tags`.
+     * One endpoint through the library's {@see Api}: the decoded body of a 2xx
+     * JSON answer, or null — with the reason in {@see lastFailure()} and the
+     * log — for an error status, a redirect, a non-JSON answer or none at all.
+     * An error body is never handed to a caller as the data it asked for.
      *
-     * @param array<string> $tags
-     * @return bool
-     */
-    public function deliverTags(array $tags): bool
-    {
-        return $tags !== [] && $this->purgeTags($tags) !== null;
-    }
-
-    /**
-     * Clear the whole edge cache. Returns Trident's acknowledgement, or null
-     * when the clear was not acknowledged.
-     *
+     * @param string $method
+     * @param string $path
+     * @param array<string, scalar|null> $query
+     * @param array<string, mixed>|null $body
      * @return array<string, mixed>|null
      */
-    public function purgeAll(): ?array
+    private function call(string $method, string $path, array $query = [], ?array $body = null): ?array
     {
-        if ($this->fansOut()) {
-            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeAll());
-        }
-
-        if (!$this->isEnabled()) {
+        $target = $this->ready();
+        if ($target === null) {
             return null;
         }
-
         try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-                'Content-Type' => 'application/json',
+            $data = (new Api($target, $this->transport, $this->logger))->call($method, $path, $query, $body)['data'];
+        } catch (\Throwable $e) {
+            return $this->failed($target, $method . ' ' . $path, $e);
+        }
+        $this->lastFailure = null;
+        if ($method !== 'GET' && $this->config->isDebugEnabled()) {
+            $this->logger->info('Trident ' . $method, [
+                'instance' => $target->name,
+                'path' => $path,
+                'data' => $body,
+                'result' => $data,
             ]);
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('POST');
-            $this->curl->post($apiUrl . '/admin/cache/clear', (string) json_encode(['confirm' => true]));
-            $result = $this->acknowledged('cache_clear', self::isClearAck(...));
-
-            if ($this->config->isDebugEnabled()) {
-                $this->logger->info('Trident cache cleared', ['result' => $result]);
-            }
-
-            return $result;
-        } catch (\Exception $e) {
-            $this->lastFailure = 'cache_clear: ' . $e->getMessage();
-            $this->logger->error('Trident cache clear failed', ['error' => $e->getMessage()]);
-            return null;
         }
+        return $data;
     }
 
     /**
-     * X02: why the last purge or clear was not acknowledged, or null.
-     *
-     * @return string|null
+     * @param Instance $target
+     * @param string $request
+     * @param \Throwable $e
+     * @return null
      */
-    public function lastFailure(): ?string
+    private function failed(Instance $target, string $request, \Throwable $e): ?array
     {
-        return $this->lastFailure;
-    }
-
-    /**
-     * X02: whether Trident acknowledged a full clear.
-     *
-     * @return bool
-     */
-    public function deliverAll(): bool
-    {
-        return $this->purgeAll() !== null;
-    }
-
-    /**
-     * X02: the decoded body of the last response IF it is an acknowledgement:
-     * HTTP 200 and a body matching the engine's schema for that endpoint.
-     *
-     * Anything else — 401 (token), 429 (admin limiter), 5xx or a full queue,
-     * a proxy's HTML error page, an error object sent with a 200 — is not a
-     * purge that happened, and is logged as the reason it did not.
-     *
-     * @param string $context
-     * @param callable(array<string, mixed>): bool $isAck
-     * @return array<string, mixed>|null
-     */
-    private function acknowledged(string $context, callable $isAck): ?array
-    {
-        $status = (int) $this->curl->getStatus();
-        $decoded = json_decode((string) $this->curl->getBody(), true);
-        if ($status === 200 && is_array($decoded) && $isAck($decoded)) {
-            $this->lastFailure = null;
-            return $decoded;
-        }
-        if ($status === 202 && is_array($decoded) && self::isDeferredAck($decoded)) {
-            // Reflect mode: the engine durably queued the purge and replays it
-            // when reflect ends. Retrying it every few minutes would only queue
-            // duplicates until the reflect queue is full, and then genuinely
-            // new purges get 503.
-            $this->lastFailure = null;
-            return $decoded;
-        }
-        $error = is_array($decoded) ? ($decoded['error'] ?? null) : 'response is not JSON';
-        $this->lastFailure = sprintf(
-            '%s: HTTP %d%s',
-            $context,
-            $status,
-            is_string($error) ? ' — ' . $error : ''
-        );
-        $this->logger->error('Trident did not acknowledge the request', [
-            'context' => $context,
-            'status' => $status,
-            'error' => $error,
+        $reason = $e instanceof ApiError ? $e->reason() : $e->getMessage();
+        $this->lastFailure = $request . ': ' . $reason;
+        $this->logger->error('Trident admin request failed', [
+            'instance' => $target->name,
+            'request' => $request,
+            'reason' => $reason,
         ]);
         return null;
     }
 
     /**
-     * `PurgeResponse`: `purged` (count) and `mode` — the fields every engine
-     * sends. 1.8 adds `state`/`barrier`, but the fleet runs 1.6/1.7, which
-     * answer `{"purged":0,"mode":"soft","queued_refresh":0}`: requiring
-     * `state` would retry every purge against them forever (found on the live
-     * Magento stack, not by the unit tests, which had encoded the 1.8 schema).
+     * A purge or clear on this client's target: the decoded acknowledgement,
+     * or null (the reason in {@see lastFailure()} and the log).
      *
-     * @param array<string, mixed> $body
-     * @return bool
-     */
-    private static function isPurgeAck(array $body): bool
-    {
-        return is_int($body['purged'] ?? null)
-            && is_string($body['mode'] ?? null)
-            && (!isset($body['state']) || is_string($body['state']));
-    }
-
-    /**
-     * The engine's answer to a purge Reflect mode deferred: HTTP 202,
-     * `status: "deferred"`, `state: "recorded"` — written to the reflect queue
-     * durably (a failed write answers 503 with `state: "refused"` instead).
-     *
-     * @param array<string, mixed> $body
-     * @return bool
-     */
-    private static function isDeferredAck(array $body): bool
-    {
-        return ($body['status'] ?? null) === 'deferred' && ($body['state'] ?? null) === 'recorded';
-    }
-
-    /**
-     * `CacheClearResponse`: `cleared` must be true.
-     *
-     * @param array<string, mixed> $body
-     * @return bool
-     */
-    private static function isClearAck(array $body): bool
-    {
-        return ($body['cleared'] ?? null) === true;
-    }
-
-    /**
-     * Get cache statistics
-     *
-     * @return array<string, mixed>|null
-     */
-    public function getStats(): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-            ]);
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('GET');
-            $this->curl->get($apiUrl . '/admin/stats');
-
-            $response = $this->curl->getBody();
-            return json_decode($response, true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident get stats failed', ['error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Get cache rules
-     *
-     * @return array<string, mixed>|null
-     */
-    public function getRules(): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-            ]);
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('GET');
-            $this->curl->get($apiUrl . '/admin/rules');
-
-            $response = $this->curl->getBody();
-            return json_decode($response, true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident get rules failed', ['error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Get Trident health status
-     *
-     * @return array<string, mixed>|null
-     */
-    public function getHealth(): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-            ]);
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('GET');
-            $this->curl->get($apiUrl . '/admin/health');
-
-            $response = $this->curl->getBody();
-            return json_decode($response, true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident health check failed', ['error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Trident 1.5.0 license / degraded-mode status: GET /admin/status.
-     *
-     * Returns ['status','version','license','mode'] where `mode` is 'licensed'
-     * (caching active), 'degraded' (license check failed → pass-through, no
-     * caching), or 'unknown'. Distinct from getHealth() (mere reachability).
-     *
-     * @return array<string, mixed>|null
-     */
-    public function getStatus(): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-            ]);
-
-            $this->prepareRequest('GET');
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->curl->get($apiUrl . '/admin/status');
-            $this->logHttpError('GET /admin/status');
-
-            return json_decode($this->curl->getBody(), true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident status check failed', ['error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Trident 1.5.0 dry-run cacheability diagnostic: POST /admin/explain.
-     *
-     * Answers "will this request cache, and if not, why?" without mutating the
-     * cache. Useful for debugging why a Magento page/URL is not being cached.
-     *
-     * @param array<string, string> $headers
-     * @return array<string, mixed>|null
-     */
-    public function explain(string $method, string $url, array $headers = [], bool $detail = true): ?array
-    {
-        return $this->apiPost('/admin/explain', [
-            'method' => $method,
-            'url' => $url,
-            // Cast so an empty header set serialises as {} (object), not [] —
-            // Trident's ExplainRequest.headers is a map.
-            'headers' => (object) $headers,
-            'detail' => $detail,
-        ]);
-    }
-
-    /**
-     * Get cache entries with optional filtering
-     *
-     * @param int $offset
-     * @param int $limit
-     * @param string|null $tag
-     * @param string $sort
-     * @return array<string, mixed>|null
-     */
-    public function getEntries(int $offset = 0, int $limit = 50, ?string $tag = null, string $sort = 'age'): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-            ]);
-
-            $params = ['offset' => $offset, 'limit' => $limit, 'sort' => $sort];
-            if ($tag !== null && $tag !== '') {
-                $params['tag'] = $tag;
-            }
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('GET');
-            $this->curl->get($apiUrl . '/admin/cache/entries?' . http_build_query($params));
-
-            $response = $this->curl->getBody();
-            return json_decode($response, true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident get entries failed', ['error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Get cache tags with optional prefix filtering
-     *
-     * @param int $offset
-     * @param int $limit
-     * @param string|null $prefix
-     * @param string $sort
-     * @return array<string, mixed>|null
-     */
-    public function getTags(int $offset = 0, int $limit = 100, ?string $prefix = null, string $sort = 'count'): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-            ]);
-
-            $params = ['offset' => $offset, 'limit' => $limit, 'sort' => $sort];
-            if ($prefix !== null && $prefix !== '') {
-                $params['prefix'] = $prefix;
-            }
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('GET');
-            $this->curl->get($apiUrl . '/admin/cache/tags?' . http_build_query($params));
-
-            $response = $this->curl->getBody();
-            return json_decode($response, true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident get tags failed', ['error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Get top URLs by request count
-     *
-     * @param int $limit
-     * @param string $sort
-     * @return array<string, mixed>|null
-     */
-    public function getTopUrls(int $limit = 20, string $sort = 'requests'): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-            ]);
-
-            $params = ['limit' => $limit, 'sort' => $sort];
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('GET');
-            $this->curl->get($apiUrl . '/admin/stats/top?' . http_build_query($params));
-
-            $response = $this->curl->getBody();
-            return json_decode($response, true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident get top urls failed', ['error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Purge a single URL from cache
-     *
-     * @param string $url
-     * @param string|null $host
-     * @return array<string, mixed>|null
-     */
-    public function purgeUrl(string $url, ?string $host = null): ?array
-    {
-        if ($this->fansOut()) {
-            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeUrl($url, $host));
-        }
-
-        if (!$this->isEnabled() || empty($url)) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-                'Content-Type' => 'application/json',
-            ]);
-
-            $data = [
-                'url' => $url,
-                'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
-            ];
-
-            if ($host !== null && $host !== '') {
-                $data['host'] = $host;
-            }
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('POST');
-            $this->curl->post($apiUrl . '/admin/purge/url', json_encode($data));
-
-            $response = $this->curl->getBody();
-            $result = json_decode($response, true);
-
-            if ($this->config->isDebugEnabled()) {
-                $this->logger->info('Trident cache purge url', [
-                    'url' => $url,
-                    'host' => $host,
-                    'result' => $result,
-                ]);
-            }
-
-            return $result;
-        } catch (\Exception $e) {
-            $this->logger->error('Trident cache purge url failed', [
-                'url' => $url,
-                'error' => $e->getMessage(),
-            ]);
-            return null;
-        }
-    }
-
-    /**
-     * Purge cache by URL pattern
-     *
-     * @param string $pattern
-     * @return array<string, mixed>|null
-     */
-    public function purgePattern(string $pattern): ?array
-    {
-        if ($this->fansOut()) {
-            return $this->onEveryInstance(fn (self $client): ?array => $client->purgePattern($pattern));
-        }
-
-        if (!$this->isEnabled() || empty($pattern)) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders([
-                'Authorization' => 'Bearer ' . $this->target()->apiToken,
-                'Content-Type' => 'application/json',
-            ]);
-
-            $payload = json_encode([
-                'pattern' => $pattern,
-                'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
-            ]);
-
-            $apiUrl = rtrim($this->target()->apiUrl, '/');
-            $this->prepareRequest('POST');
-            $this->curl->post($apiUrl . '/admin/purge/urls', $payload);
-
-            $response = $this->curl->getBody();
-            $result = json_decode($response, true);
-
-            if ($this->config->isDebugEnabled()) {
-                $this->logger->info('Trident cache purge by pattern', [
-                    'pattern' => $pattern,
-                    'result' => $result,
-                ]);
-            }
-
-            return $result;
-        } catch (\Exception $e) {
-            $this->logger->error('Trident cache purge by pattern failed', [
-                'pattern' => $pattern,
-                'error' => $e->getMessage(),
-            ]);
-            return null;
-        }
-    }
-
-    // =========================================================================
-    // Generic request helpers (used by the feature methods below)
-    // =========================================================================
-
-    /**
-     * @return array<string, string>
-     */
-    private function authHeaders(bool $json = false): array
-    {
-        $headers = ['Authorization' => 'Bearer ' . $this->target()->apiToken];
-        if ($json) {
-            $headers['Content-Type'] = 'application/json';
-        }
-
-        return $headers;
-    }
-
-    /**
-     * Perform an authenticated GET and decode the JSON body.
-     *
-     * @return array<string, mixed>|null
-     */
-    private function apiGet(string $path): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
-        }
-
-        try {
-            $this->curl->setHeaders($this->authHeaders());
-            $this->prepareRequest('GET');
-            $this->curl->get(rtrim($this->target()->apiUrl, '/') . $path);
-            $this->logHttpError('GET ' . $path);
-
-            return json_decode($this->curl->getBody(), true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident GET failed', ['path' => $path, 'error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Perform an authenticated POST with a JSON body and decode the response.
-     *
+     * @param string $path
      * @param array<string, mixed> $data
      * @return array<string, mixed>|null
      */
-    private function apiPost(string $path, array $data = []): ?array
+    private function invalidate(string $path, array $data): ?array
     {
-        if (!$this->isEnabled()) {
+        $target = $this->ready();
+        if ($target === null) {
             return null;
         }
-
-        try {
-            $this->curl->setHeaders($this->authHeaders(true));
-            $this->prepareRequest('POST');
-            $this->curl->post(rtrim($this->target()->apiUrl, '/') . $path, json_encode($data));
-            $this->logHttpError('POST ' . $path);
-            $result = json_decode($this->curl->getBody(), true);
-
-            if ($this->config->isDebugEnabled()) {
-                $this->logger->info('Trident POST', ['path' => $path, 'data' => $data, 'result' => $result]);
-            }
-
-            return $result;
-        } catch (\Exception $e) {
-            $this->logger->error('Trident POST failed', ['path' => $path, 'error' => $e->getMessage()]);
-            return null;
+        [$attempt, $body] = $this->send($target, $path, $data);
+        if ($this->config->isDebugEnabled()) {
+            $this->logger->info('Trident ' . $path, ['instance' => $target->name, 'data' => $data, 'result' => $body]);
         }
-    }
-
-    /**
-     * Perform an authenticated DELETE and decode the JSON body.
-     *
-     * @return array<string, mixed>|null
-     */
-    private function apiDelete(string $path): ?array
-    {
-        if (!$this->isEnabled()) {
-            return null;
+        $context = $path === '/admin/cache/clear' ? 'cache_clear' : 'purge_tags';
+        if ($attempt->acknowledged()) {
+            $this->lastFailure = null;
+            return $body ?? [];
         }
-
-        try {
-            $this->curl->setHeaders($this->authHeaders());
-            // prepareRequest pins CURLOPT_CUSTOMREQUEST=DELETE *and* the timeouts,
-            // and the next GET/POST re-pins its own verb — so the DELETE cannot
-            // leak into a later call on the shared Curl handle.
-            $this->prepareRequest('DELETE');
-            $this->curl->get(rtrim($this->target()->apiUrl, '/') . $path);
-            $this->logHttpError('DELETE ' . $path);
-
-            return json_decode($this->curl->getBody(), true);
-        } catch (\Exception $e) {
-            $this->logger->error('Trident DELETE failed', ['path' => $path, 'error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    // =========================================================================
-    // Cache Warmer
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function getWarmerStatus(): ?array
-    {
-        return $this->apiGet('/admin/warmer/status');
-    }
-
-    /**
-     * @param array<int, string> $urls Optional explicit URL list; empty = warm configured sources.
-     * @return array<string, mixed>|null
-     */
-    public function warmerRun(array $urls = []): ?array
-    {
-        $data = [];
-        if (!empty($urls)) {
-            $data['urls'] = array_values($urls);
-        }
-
-        return $this->apiPost('/admin/warmer/run', $data);
-    }
-
-    /**
-     * @param array<int, string> $urls
-     * @return array<string, mixed>|null
-     */
-    public function warmerQueue(array $urls): ?array
-    {
-        return $this->apiPost('/admin/warmer/queue', ['urls' => array_values($urls)]);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function warmerCancel(): ?array
-    {
-        return $this->apiPost('/admin/warmer/cancel');
-    }
-
-    // =========================================================================
-    // Cache Coverage
-    // =========================================================================
-
-    /**
-     * Batch cache-membership check: per-URL cached/not + aggregate percentage.
-     *
-     * @param array<int, string> $urls
-     * @return array<string, mixed>|null
-     */
-    public function cacheCoverage(
-        array $urls,
-        ?string $host = null,
-        string $scheme = 'https',
-        string $method = 'GET'
-    ): ?array {
-        $payload = [
-            'urls' => array_values($urls),
-            'scheme' => $scheme,
-            'method' => $method,
-        ];
-
-        if ($host !== null && $host !== '') {
-            $payload['host'] = $host;
-        }
-
-        return $this->apiPost('/admin/cache/coverage', $payload);
-    }
-
-    // =========================================================================
-    // Launch Mode
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function getLaunchStatus(): ?array
-    {
-        return $this->apiGet('/admin/launch/status');
-    }
-
-    /**
-     * @param array<string, mixed> $options
-     * @return array<string, mixed>|null
-     */
-    public function launchStart(array $options = []): ?array
-    {
-        return $this->apiPost('/admin/launch/start', $options);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function launchComplete(): ?array
-    {
-        return $this->apiPost('/admin/launch/complete');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function launchAbort(?string $reason = null): ?array
-    {
-        $data = [];
-        if ($reason !== null && $reason !== '') {
-            $data['reason'] = $reason;
-        }
-
-        return $this->apiPost('/admin/launch/abort', $data);
-    }
-
-    // =========================================================================
-    // Reflect Mode
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function getReflectStatus(): ?array
-    {
-        return $this->apiGet('/admin/reflect/status');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getReflectQueue(): ?array
-    {
-        return $this->apiGet('/admin/reflect/queue');
-    }
-
-    /**
-     * @param string $level full|selective|ttl_extension
-     * @return array<string, mixed>|null
-     */
-    public function reflectEnable(string $level = 'full', ?string $duration = null, ?string $reason = null): ?array
-    {
-        $data = ['level' => $level];
-        if ($duration !== null && $duration !== '') {
-            $data['duration'] = $duration;
-        }
-        if ($reason !== null && $reason !== '') {
-            $data['reason'] = $reason;
-        }
-
-        return $this->apiPost('/admin/reflect/enable', $data);
-    }
-
-    /**
-     * @param string $mode replay|hard
-     * @return array<string, mixed>|null
-     */
-    public function reflectDisable(string $mode = 'replay'): ?array
-    {
-        return $this->apiPost('/admin/reflect/disable', ['mode' => $mode]);
-    }
-
-    // =========================================================================
-    // Denoisers
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function getDenoiserReport(): ?array
-    {
-        return $this->apiGet('/admin/denoisers/report');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getDenoiserQueryScopes(): ?array
-    {
-        return $this->apiGet('/admin/denoisers/query/scopes');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getDenoiserPathZones(): ?array
-    {
-        return $this->apiGet('/admin/denoisers/path/zones');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function denoiserQueryPin(string $param, ?string $pathPrefix = null): ?array
-    {
-        $data = ['param' => $param];
-        if ($pathPrefix !== null && $pathPrefix !== '') {
-            $data['path_prefix'] = $pathPrefix;
-        }
-
-        return $this->apiPost('/admin/denoisers/query/pin', $data);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function denoiserQueryUnpin(string $param, ?string $pathPrefix = null): ?array
-    {
-        $data = ['param' => $param];
-        if ($pathPrefix !== null && $pathPrefix !== '') {
-            $data['path_prefix'] = $pathPrefix;
-        }
-
-        return $this->apiPost('/admin/denoisers/query/unpin', $data);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function denoiserQueryReset(): ?array
-    {
-        return $this->apiPost('/admin/denoisers/query/reset');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function denoiserPathPin(string $host, string $pathPrefix): ?array
-    {
-        return $this->apiPost('/admin/denoisers/path/pin', ['host' => $host, 'path_prefix' => $pathPrefix]);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function denoiserPathUnpin(string $host, string $pathPrefix): ?array
-    {
-        return $this->apiPost('/admin/denoisers/path/unpin', ['host' => $host, 'path_prefix' => $pathPrefix]);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function denoiserPathReset(): ?array
-    {
-        return $this->apiPost('/admin/denoisers/path/reset', []);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getDenoiserWafExport(): ?array
-    {
-        return $this->apiGet('/admin/denoisers/export/waf');
-    }
-
-    // =========================================================================
-    // Bans (soft purge)
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function getBans(): ?array
-    {
-        return $this->apiGet('/admin/bans');
-    }
-
-    /**
-     * @param string $type url|tag|pattern|bulkurl|tags (Trident BanType enum)
-     * @return array<string, mixed>|null
-     */
-    public function createBan(string $pattern, string $type = 'url'): ?array
-    {
-        // X03: first instance only, like listing and deleting them — ban ids
-        // are per engine, so a ban created everywhere could be deleted from
-        // one instance and live on, unseen, on the others.
-
-        // The /admin/bans request body field is `type` (serde rename of ban_type).
-        return $this->apiPost('/admin/bans', ['pattern' => $pattern, 'type' => $type]);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function deleteBan(string $id): ?array
-    {
-        return $this->apiDelete('/admin/bans/' . rawurlencode($id));
-    }
-
-    // =========================================================================
-    // Backends + connection pools
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function getBackends(): ?array
-    {
-        return $this->apiGet('/admin/backends');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getBackendDetail(string $name): ?array
-    {
-        return $this->apiGet('/admin/backends/detail?' . http_build_query(['name' => $name]));
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getConnections(): ?array
-    {
-        return $this->apiGet('/admin/connections');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function drainBackend(string $name): ?array
-    {
-        return $this->apiPost('/admin/backends/drain', ['name' => $name]);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function restoreBackend(string $name): ?array
-    {
-        return $this->apiPost('/admin/backends/restore', ['name' => $name]);
-    }
-
-    // =========================================================================
-    // DNS discovery
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function getDiscovery(): ?array
-    {
-        return $this->apiGet('/admin/discovery');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getDiscoveryDetail(string $name): ?array
-    {
-        return $this->apiGet('/admin/discovery/detail?' . http_build_query(['name' => $name]));
-    }
-
-    /**
-     * Force a DNS re-resolve for a single discovery target. Trident's
-     * /admin/discovery/refresh requires the backend `name` as a query param.
-     *
-     * @return array<string, mixed>|null
-     */
-    public function refreshDiscovery(string $name): ?array
-    {
-        return $this->apiPost('/admin/discovery/refresh?' . http_build_query(['name' => $name]));
-    }
-
-    // =========================================================================
-    // Extended statistics + memory
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function getLatencyStats(): ?array
-    {
-        return $this->apiGet('/admin/stats/latency');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getErrorStats(int $limit = 20): ?array
-    {
-        return $this->apiGet('/admin/stats/errors?' . http_build_query(['limit' => $limit]));
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getProtectionStats(): ?array
-    {
-        return $this->apiGet('/admin/stats/protection');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getMemory(): ?array
-    {
-        return $this->apiGet('/admin/memory');
-    }
-
-    /** @return array<string, mixed>|null */
-    public function getRefreshQueue(): ?array
-    {
-        return $this->apiGet('/admin/refresh/queue');
-    }
-
-    // =========================================================================
-    // Extended purge (host / vary)
-    // =========================================================================
-
-    /** @return array<string, mixed>|null */
-    public function purgeHost(string $host): ?array
-    {
-        if ($this->fansOut()) {
-            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeHost($host));
-        }
-
-        return $this->apiPost('/admin/purge/host', [
-            'host' => $host,
-            'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
+        $this->lastFailure = $context . ': ' . $attempt->failure;
+        $this->logger->error('Trident did not acknowledge the request', [
+            'instance' => $target->name,
+            'context' => $context,
+            'error' => $attempt->failure,
         ]);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function purgeVary(string $header, string $value): ?array
-    {
-        if ($this->fansOut()) {
-            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeVary($header, $value));
-        }
-
-        return $this->apiPost('/admin/purge/vary', [
-            'header' => $header,
-            'value' => $value,
-            'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
-        ]);
+        return null;
     }
 
     /**
-     * Trident 1.5.0 tag-pattern purge: POST /admin/purge/tag/pattern.
+     * The one place a purge or clear is sent and judged: the library's
+     * {@see Acknowledgement} — HTTP 200 with the engine's schema for the
+     * endpoint, or (a purge) Reflect mode's 202 `recorded`. Anything else —
+     * 401, 429, 5xx, a full queue, a proxy's HTML page, an error object sent
+     * with a 200 — is not a purge that happened.
      *
-     * Purge every entry whose tag matches a wildcard (default) or regex pattern
-     * — e.g. `catalog_product_*` or `cat_c_*`. Distinct from purgePattern(),
-     * which matches URL globs via /admin/purge/urls.
-     *
-     * @return array<string, mixed>|null
+     * @param Instance $instance
+     * @param string $path
+     * @param array<string, mixed> $data
+     * @return array{0: PurgeAttempt, 1: array<string, mixed>|null} The attempt, and the decoded answer.
      */
-    public function purgeTagPattern(string $pattern, bool $regex = false): ?array
+    private function send(Instance $instance, string $path, array $data): array
     {
-        if ($this->fansOut()) {
-            return $this->onEveryInstance(fn (self $client): ?array => $client->purgeTagPattern($pattern, $regex));
+        $response = $this->transport->request(
+            'POST',
+            $instance->apiUrl . $path,
+            Api::headers($instance),
+            (string) json_encode($data)
+        );
+        if ($response['status'] === 0) {
+            $error = (string) ($response['error'] ?? '');
+            return [new PurgeAttempt('no response' . ($error !== '' ? ' — ' . $error : ''), true), null];
         }
-
-        return $this->apiPost('/admin/purge/tag/pattern', [
-            'pattern' => $pattern,
-            'pattern_type' => $regex ? 'regex' : 'wildcard',
-            'mode' => $this->config->isSoftPurgeEnabled() ? 'soft' : 'hard',
-        ]);
+        $failure = $path === '/admin/cache/clear'
+            ? Acknowledgement::clearFailure($response['status'], $response['body'])
+            : Acknowledgement::purgeFailure($response['status'], $response['body']);
+        $decoded = json_decode($response['body'], true);
+        return [new PurgeAttempt($failure), is_array($decoded) ? $decoded : null];
     }
 }

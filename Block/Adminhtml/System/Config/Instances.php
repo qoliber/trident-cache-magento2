@@ -56,7 +56,7 @@ class Instances extends Field
             $rows .= '<li style="color:#e22626">' . $this->escapeHtml(__('Skipped: %1', $error)) . '</li>';
         }
         $source = $this->config->getInstanceErrors() !== [] || count($this->config->getInstances()) > 1
-            || $this->config->getInstances()[0]->name !== Config::DEFAULT_INSTANCE
+            || ($this->config->getInstances()[0]->name ?? Config::DEFAULT_INSTANCE) !== Config::DEFAULT_INSTANCE
             ? __('From app/etc/env.php (system/default/system/full_page_cache/trident/instances) — takes precedence over the API URL above. An instance without its own api_token uses the API Token above.')
             : __('The API URL above. To purge several Trident servers, list them in app/etc/env.php under system/default/system/full_page_cache/trident/instances, then run bin/magento app:config:import.');
 

@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace Qoliber\TridentCache\Console\Command;
 
 use Qoliber\TridentCache\Cron\DrainPurgeOutbox;
+use Qoliber\TridentCache\Model\Clock;
 use Qoliber\TridentCache\Model\Config;
 use Qoliber\TridentCache\Model\Outbox\PurgeOutboxInterface;
 use Symfony\Component\Console\Command\Command;
@@ -31,10 +32,12 @@ class PurgeStatusCommand extends Command
     /**
      * @param PurgeOutboxInterface $outbox
      * @param Config $config
+     * @param Clock $clock
      */
     public function __construct(
         private readonly PurgeOutboxInterface $outbox,
-        private readonly Config $config
+        private readonly Config $config,
+        private readonly Clock $clock
     ) {
         parent::__construct();
     }
@@ -55,7 +58,7 @@ class PurgeStatusCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $stats = $this->outbox->stats();
+        $stats = $this->outbox->stats($this->clock->now());
         $output->writeln(sprintf('pending:      %d', $stats['pending']));
         $output->writeln(sprintf(
             'oldest age:   %s',
@@ -63,7 +66,9 @@ class PurgeStatusCommand extends Command
         ));
         $output->writeln(sprintf(
             'last failure: %s',
-            $stats['last_error'] === null ? '-' : $stats['last_error'] . ' (' . $stats['last_error_at'] . ')'
+            $stats['last_error'] === null
+                ? '-'
+                : $stats['last_error'] . ' (' . gmdate('Y-m-d H:i:s', (int) $stats['last_error_at']) . ' UTC)'
         ));
         $healthy = true;
         $configured = [];

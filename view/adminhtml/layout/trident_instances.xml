@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Created by qoliber
+ *
+ * @category    Qoliber
+ * @package     Qoliber_TridentCache
+ * @author      Jakub Winkler <jwinkler@qoliber.com>
+ */
+-->
+<!-- X03: the instance switcher, on every Trident screen -->
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <body>
+        <referenceContainer name="content">
+            <block class="Magento\Backend\Block\Template"
+                   name="trident.instance.switcher"
+                   template="Qoliber_TridentCache::instance_switcher.phtml"
+                   before="-">
+                <arguments>
+                    <argument name="view_model" xsi:type="object">Qoliber\TridentCache\ViewModel\Instances</argument>
+                </arguments>
+            </block>
+        </referenceContainer>
+    </body>
+</page>

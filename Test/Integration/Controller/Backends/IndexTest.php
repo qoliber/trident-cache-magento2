@@ -13,10 +13,9 @@ declare(strict_types=1);
 namespace Qoliber\TridentCache\Test\Integration\Controller\Backends;
 
 use Magento\Backend\App\Action\Context;
-use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\View\Page\Config as PageConfig;
 use Magento\Framework\View\Page\Title;
-use Magento\Framework\View\Result\Page;
+use Magento\Backend\Model\View\Result\Page;
 use Magento\Framework\View\Result\PageFactory;
 use PHPUnit\Framework\TestCase;
 use Qoliber\TridentCache\Controller\Adminhtml\Backends\Index;
@@ -48,10 +47,9 @@ class IndexTest extends TestCase
         $pageFactoryMock = $this->createMock(PageFactory::class);
         $pageFactoryMock->method('create')->willReturn($pageMock);
 
+        // The backend Context has no getScopeConfig(); the controller needs
+        // nothing from it beyond construction.
         $contextMock = $this->createMock(Context::class);
-        $contextMock->method('getScopeConfig')->willReturn(
-            $this->createMock(ScopeConfigInterface::class)
-        );
 
         $controller = new Index($contextMock, $pageFactoryMock);
 

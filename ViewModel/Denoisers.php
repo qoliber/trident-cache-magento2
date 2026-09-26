@@ -60,7 +60,8 @@ class Denoisers implements ArgumentInterface
 
     public function getApiUrl(): string
     {
-        return $this->config->getApiUrl();
+        // X03: the instance this screen shows.
+        return $this->tridentClient->target()?->apiUrl ?? $this->config->getApiUrl();
     }
 
     public function formatNumber(int|float $number): string

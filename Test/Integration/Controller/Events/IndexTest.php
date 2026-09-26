@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace Qoliber\TridentCache\Test\Integration\Controller\Events;
 
 use Magento\Backend\App\Action\Context;
-use Magento\Framework\View\Element\Title;
+use Magento\Framework\View\Page\Title;
 use Magento\Framework\View\Page\Config as PageConfig;
-use Magento\Framework\View\Result\Page;
+use Magento\Backend\Model\View\Result\Page;
 use Magento\Framework\View\Result\PageFactory;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;

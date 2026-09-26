@@ -16,7 +16,7 @@ use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\Encryption\EncryptorInterface;
 use PHPUnit\Framework\TestCase;
 use Qoliber\TridentCache\Model\Config;
-use Qoliber\TridentCache\Model\Instance;
+use Qoliber\Trident\Delivery\Instance;
 
 /**
  * X03: the instances come from env.php, layered over the admin setting —
@@ -27,10 +27,10 @@ class ConfigInstancesTest extends TestCase
     /**
      * @param mixed $instances What env.php holds under trident/instances.
      */
-    private function config(mixed $instances): Config
+    private function config(mixed $instances, string $adminUrl = 'http://admin-edge:9301'): Config
     {
         $values = [
-            Config::XML_TRIDENT_API_URL => 'http://admin-edge:9301',
+            Config::XML_TRIDENT_API_URL => $adminUrl,
             Config::XML_TRIDENT_API_TOKEN => '0:3:admin-encrypted',
             Config::XML_TRIDENT_INSTANCES => $instances,
         ];
@@ -43,7 +43,7 @@ class ConfigInstancesTest extends TestCase
     }
 
     /**
-     * @param array<int, Instance> $instances
+     * @param list<Instance> $instances
      * @return array<int, array{string, string, string}>
      */
     private static function flat(array $instances): array
@@ -120,10 +120,61 @@ class ConfigInstancesTest extends TestCase
 
     public function testANameTooLongToStoreIsRefused(): void
     {
-        $long = str_repeat('e', Config::MAX_INSTANCE_NAME + 1);
+        $long = str_repeat('e', 65);
         $config = $this->config([$long => ['api_url' => 'http://10.0.0.11:9301']]);
 
         $this->assertSame(['default'], array_map(fn (Instance $i): string => $i->name, $config->getInstances()));
-        $this->assertStringContainsString('name longer than 64', $config->getInstanceErrors()[0]);
+        $this->assertStringContainsString('1-64 characters', $config->getInstanceErrors()[0]);
+    }
+
+    /**
+     * The library's rules, shared by every Trident platform integration: a
+     * name is stored with each pending purge and compared case-sensitively,
+     * so it is plain ASCII; an admin API is an http(s) URL.
+     */
+    public function testANameWithCharactersTheOutboxCannotHoldIsRefused(): void
+    {
+        $config = $this->config([
+            'edge 1' => ['api_url' => 'http://10.0.0.11:9301'],
+            'edge-2' => ['api_url' => 'http://10.0.0.12:9301'],
+        ]);
+
+        $this->assertSame(['edge-2'], array_map(fn (Instance $i): string => $i->name, $config->getInstances()));
+        $this->assertStringStartsWith('edge 1: name must be', $config->getInstanceErrors()[0]);
+    }
+
+    public function testAnApiUrlThatIsNotHttpIsRefused(): void
+    {
+        $config = $this->config([
+            'edge-1' => ['api_url' => 'file:///etc/passwd'],
+            'edge-2' => ['api_url' => 'http://10.0.0.12:9301/'],
+        ]);
+
+        $this->assertSame(
+            [['edge-2', 'http://10.0.0.12:9301', 'decrypted(0:3:admin-encrypted)']],
+            self::flat($config->getInstances()),
+            'the trailing slash is trimmed: paths are appended to it'
+        );
+        $this->assertStringContainsString('is not an http(s) URL', $config->getInstanceErrors()[0]);
+    }
+
+    /**
+     * The module used to hand the URL to libcurl, which assumes http when a
+     * URL has no scheme — so `trident:9301` worked and must keep working.
+     */
+    public function testAUrlWithoutASchemeIsHttpAsBefore(): void
+    {
+        $config = $this->config(['edge-1' => ['api_url' => '10.0.0.11:9301']], 'trident:9301');
+
+        $this->assertSame('http://10.0.0.11:9301', $config->getInstances()[0]->apiUrl);
+        $this->assertSame('http://trident:9301', $this->config(null, 'trident:9301')->getInstances()[0]->apiUrl);
+    }
+
+    public function testAnAdminUrlWithAnotherSchemeLeavesNoInstanceAndSaysWhy(): void
+    {
+        $config = $this->config(null, 'gopher://trident:9301');
+
+        $this->assertSame([], $config->getInstances());
+        $this->assertStringContainsString('is not an http(s) URL', $config->getInstanceErrors()[0]);
     }
 }
