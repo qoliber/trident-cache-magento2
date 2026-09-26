@@ -27,10 +27,10 @@ class ConfigInstancesTest extends TestCase
     /**
      * @param mixed $instances What env.php holds under trident/instances.
      */
-    private function config(mixed $instances): Config
+    private function config(mixed $instances, string $adminUrl = 'http://admin-edge:9301'): Config
     {
         $values = [
-            Config::XML_TRIDENT_API_URL => 'http://admin-edge:9301',
+            Config::XML_TRIDENT_API_URL => $adminUrl,
             Config::XML_TRIDENT_API_TOKEN => '0:3:admin-encrypted',
             Config::XML_TRIDENT_INSTANCES => $instances,
         ];
@@ -158,14 +158,23 @@ class ConfigInstancesTest extends TestCase
         $this->assertStringContainsString('is not an http(s) URL', $config->getInstanceErrors()[0]);
     }
 
-    public function testAnAdminUrlThatIsNotHttpLeavesNoInstanceAndSaysWhy(): void
+    /**
+     * The module used to hand the URL to libcurl, which assumes http when a
+     * URL has no scheme — so `trident:9301` worked and must keep working.
+     */
+    public function testAUrlWithoutASchemeIsHttpAsBefore(): void
     {
-        $values = [Config::XML_TRIDENT_API_URL => 'trident:9301'];
-        $scope = $this->createMock(ScopeConfigInterface::class);
-        $scope->method('getValue')->willReturnCallback(fn (string $path): mixed => $values[$path] ?? null);
-        $config = new Config($scope, $this->createMock(EncryptorInterface::class));
+        $config = $this->config(['edge-1' => ['api_url' => '10.0.0.11:9301']], 'trident:9301');
+
+        $this->assertSame('http://10.0.0.11:9301', $config->getInstances()[0]->apiUrl);
+        $this->assertSame('http://trident:9301', $this->config(null, 'trident:9301')->getInstances()[0]->apiUrl);
+    }
+
+    public function testAnAdminUrlWithAnotherSchemeLeavesNoInstanceAndSaysWhy(): void
+    {
+        $config = $this->config(null, 'gopher://trident:9301');
 
         $this->assertSame([], $config->getInstances());
-        $this->assertStringContainsString('"trident:9301" is not an http(s) URL', $config->getInstanceErrors()[0]);
+        $this->assertStringContainsString('is not an http(s) URL', $config->getInstanceErrors()[0]);
     }
 }

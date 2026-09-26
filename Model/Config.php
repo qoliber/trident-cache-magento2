@@ -127,19 +127,39 @@ class Config
     private function parseInstances(): array
     {
         $token = $this->getApiToken();
-        [$instances, $errors] = Instances::parse(
-            $this->scopeConfig->getValue(self::XML_TRIDENT_INSTANCES),
-            $this->getApiUrl(),
-            $token
-        );
+        $adminUrl = self::withScheme($this->getApiUrl());
+        $configured = $this->scopeConfig->getValue(self::XML_TRIDENT_INSTANCES);
+        if (is_array($configured)) {
+            foreach ($configured as $name => $entry) {
+                if (is_array($entry) && is_string($entry['api_url'] ?? null)) {
+                    $configured[$name]['api_url'] = self::withScheme($entry['api_url']);
+                }
+            }
+        }
+        [$instances, $errors] = Instances::parse($configured, $adminUrl, $token);
         if ($instances === []) {
             // A list with no usable entry falls back to the admin setting,
             // whose own problem (if any) is reported alongside.
-            [$instances, $fallbackErrors] = Instances::parse(null, $this->getApiUrl(), $token);
+            [$instances, $fallbackErrors] = Instances::parse(null, $adminUrl, $token);
             $errors = array_values(array_unique([...$errors, ...$fallbackErrors]));
         }
 
         return [$instances, $errors];
+    }
+
+    /**
+     * `trident:9301` means http://trident:9301: the module used to hand the
+     * URL to libcurl, which assumes http for a URL without a scheme, so such
+     * a setting worked — and must keep working. Any other scheme is kept, and
+     * refused unless it is http(s).
+     *
+     * @param string $url
+     * @return string
+     */
+    private static function withScheme(string $url): string
+    {
+        $url = trim($url);
+        return $url === '' || preg_match('~^[a-z][a-z0-9+.-]*://~i', $url) === 1 ? $url : 'http://' . $url;
     }
 
     public function isSoftPurgeEnabled(): bool
