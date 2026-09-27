@@ -50,7 +50,12 @@ class PurgeTag extends Action implements HttpPostActionInterface
             $result = $this->tridentClient->purgeTags([$tag]);
 
             if ($result !== null) {
-                return $resultJson->setData(['success' => true, 'message' => 'Tag purged successfully']);
+                return $resultJson->setData([
+                    'success' => true,
+                    'message' => 'Tag purged successfully',
+                    'purged' => $this->tridentClient->purgedCount($result),
+                    'summary' => $this->tridentClient->describePurge($result),
+                ]);
             }
 
             return $resultJson->setData(['success' => false, 'message' => 'Failed to purge tag']);

@@ -14,11 +14,12 @@ namespace Qoliber\TridentCache\Controller\Adminhtml\Denoisers;
 
 use Magento\Backend\App\Action;
 use Magento\Backend\App\Action\Context;
+use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Redirect;
 use Psr\Log\LoggerInterface;
 use Qoliber\TridentCache\Model\TridentClient;
 
-class Reset extends Action
+class Reset extends Action implements HttpPostActionInterface
 {
     public const ADMIN_RESOURCE = 'Qoliber_TridentCache::denoisers';
 

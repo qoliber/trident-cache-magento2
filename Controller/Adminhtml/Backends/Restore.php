@@ -14,11 +14,12 @@ namespace Qoliber\TridentCache\Controller\Adminhtml\Backends;
 
 use Magento\Backend\App\Action;
 use Magento\Backend\App\Action\Context;
+use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Redirect;
 use Psr\Log\LoggerInterface;
 use Qoliber\TridentCache\Model\TridentClient;
 
-class Restore extends Action
+class Restore extends Action implements HttpPostActionInterface
 {
     public const ADMIN_RESOURCE = 'Qoliber_TridentCache::backends';
 

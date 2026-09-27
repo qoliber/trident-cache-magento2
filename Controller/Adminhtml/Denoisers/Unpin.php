@@ -14,11 +14,12 @@ namespace Qoliber\TridentCache\Controller\Adminhtml\Denoisers;
 
 use Magento\Backend\App\Action;
 use Magento\Backend\App\Action\Context;
+use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Redirect;
 use Psr\Log\LoggerInterface;
 use Qoliber\TridentCache\Model\TridentClient;
 
-class Unpin extends Action
+class Unpin extends Action implements HttpPostActionInterface
 {
     public const ADMIN_RESOURCE = 'Qoliber_TridentCache::denoisers';
 
@@ -63,7 +64,14 @@ class Unpin extends Action
                     return $resultRedirect->setPath('trident/denoisers/index');
                 }
 
-                $result = $this->tridentClient->denoiserQueryUnpin($param, $pathPrefix !== '' ? $pathPrefix : null);
+                // `*` stays accepted here: it removes the inert "*" scopes that
+                // pins created before they were made on the real host.
+                $host = trim((string)$this->getRequest()->getParam('host', '*'));
+                $result = $this->tridentClient->denoiserQueryUnpin(
+                    $param,
+                    $pathPrefix !== '' ? $pathPrefix : null,
+                    $host !== '' ? $host : '*'
+                );
 
                 if ($result !== null) {
                     $this->messageManager->addSuccessMessage(
