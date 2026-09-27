@@ -14,6 +14,13 @@ bin/magento setup:upgrade
 
 Configuration, upgrade notes and the changelog: see `CHANGELOG.md`.
 
+## Versioning
+
+Versions follow Trident: this module 1.8.x works with Trident 1.8. MAJOR.MINOR moves
+with the engine (every Trident X.Y.0 release is also a release of this package,
+changed or not); the PATCH number is this package's own. The
+admin screens warn when a connected Trident runs another release line.
+
 ## This repository is a mirror
 
 The module is developed in the Trident repository and published here

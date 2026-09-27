@@ -155,7 +155,7 @@ class ConfigInstancesTest extends TestCase
             self::flat($config->getInstances()),
             'the trailing slash is trimmed: paths are appended to it'
         );
-        $this->assertStringContainsString('is not an http(s) URL', $config->getInstanceErrors()[0]);
+        $this->assertStringContainsString('must be scheme://host', $config->getInstanceErrors()[0]);
     }
 
     /**
@@ -175,6 +175,6 @@ class ConfigInstancesTest extends TestCase
         $config = $this->config(null, 'gopher://trident:9301');
 
         $this->assertSame([], $config->getInstances());
-        $this->assertStringContainsString('is not an http(s) URL', $config->getInstanceErrors()[0]);
+        $this->assertStringContainsString('must be scheme://host', $config->getInstanceErrors()[0]);
     }
 }

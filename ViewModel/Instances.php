@@ -15,6 +15,7 @@ namespace Qoliber\TridentCache\ViewModel;
 use Magento\Framework\View\Element\Block\ArgumentInterface;
 use Qoliber\Trident\Admin\Fleet;
 use Qoliber\Trident\Client\TridentClient as AdminClient;
+use Qoliber\Trident\Compatibility;
 use Qoliber\Trident\Delivery\Instance;
 use Qoliber\Trident\Delivery\Transport;
 use Qoliber\TridentCache\Model\Clock;
@@ -101,7 +102,7 @@ class Instances implements ArgumentInterface
      *
      * @return list<array{name: string, url: string, current: bool, ok: bool, reason: string,
      *     version: string, license: string, mode: string, entries: int|null, hit_ratio: float|null,
-     *     pending: int}>
+     *     pending: int, compat: string}>
      */
     public function overview(): array
     {
@@ -139,6 +140,8 @@ class Instances implements ArgumentInterface
                 'entries' => $stats?->getEntries(),
                 'hit_ratio' => $stats?->getHitRatioPercent(),
                 'pending' => (int) ($pending[$instance->name] ?? 0),
+                // Lockstep versioning: another MAJOR.MINOR than the module.
+                'compat' => Compatibility::warning($status?->string('version') ?? '') ?? '',
             ];
         }
         return $rows;

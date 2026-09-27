@@ -63,6 +63,7 @@ class InstancesTest extends TestCase
         $this->assertTrue($one['ok']);
         $this->assertTrue($one['current']);
         $this->assertSame(['1.8.0', 'valid', 7, 75.0], [$one['version'], $one['license'], $one['entries'], $one['hit_ratio']]);
+        $this->assertSame('', $one['compat'], 'the same release line as the module: no lockstep warning');
         $this->assertFalse($two['ok']);
         $this->assertStringContainsString('Failed to connect', $two['reason']);
         $this->assertSame(1, $two['pending']);

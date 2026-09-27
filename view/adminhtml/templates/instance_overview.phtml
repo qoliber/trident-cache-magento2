@@ -74,6 +74,13 @@ $rows = $viewModel->overview();
         <?php endforeach; ?>
         </tbody>
     </table>
+    <?php foreach ($rows as $row): ?>
+        <?php if ($row['compat'] !== ''): ?>
+            <div class="message message-warning trident-compat">
+                <?= $escaper->escapeHtml(__('Instance %1: %2', $row['name'], $row['compat'])) ?>
+            </div>
+        <?php endif; ?>
+    <?php endforeach; ?>
     <?php endif; ?>
     <?php foreach ($viewModel->errors() as $error): ?>
         <div class="message message-warning">

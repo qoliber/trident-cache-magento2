@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace Qoliber\TridentCache\ViewModel;
 
 use Magento\Framework\View\Element\Block\ArgumentInterface;
+use Qoliber\Trident\Compatibility;
 use Qoliber\TridentCache\Model\Config;
 use Qoliber\TridentCache\Model\TridentClient;
 
@@ -92,6 +93,26 @@ class Stats implements ArgumentInterface
     public function getTridentHealth(): ?array
     {
         return $this->tridentClient->getHealth();
+    }
+
+    /**
+     * The connected Trident's version, from GET /admin/status (the health
+     * endpoint does not report one), or null when it cannot be read.
+     */
+    public function getTridentVersion(): ?string
+    {
+        $version = $this->tridentClient->getStatus()['version'] ?? null;
+
+        return is_string($version) && $version !== '' ? $version : null;
+    }
+
+    /**
+     * Lockstep versioning: a warning when the connected Trident runs another
+     * MAJOR.MINOR than this module is built for, or null.
+     */
+    public function compatibilityWarning(?string $version): ?string
+    {
+        return $version !== null ? Compatibility::warning($version) : null;
     }
 
     public function formatPercentage(float $value): string

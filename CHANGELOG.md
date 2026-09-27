@@ -10,8 +10,16 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 
 ## [1.8.0] — unreleased (pairs with Trident 1.8.0)
 
-<!-- At tag time: replace "unreleased" with the release date, tag v1.8.0 at
-     that commit, and point the engine submodule at it (F15). -->
+<!-- At the engine release the pipeline tags this repository v1.8.0 (lockstep,
+     docs/release/PACKAGE-VERSIONING.md in the Trident repository). -->
+
+- Versioning follows Trident (lockstep): module 1.8.x works with Trident 1.8.
+  The Cache Management status and the instance overview warn when a connected
+  Trident runs another release line than the module is built for.
+- Requires `qoliber/trident-php` ^1.8.1 (its `Compatibility` helper).
+- Fix: the Cache Management status block showed no Trident version or uptime —
+  it read them from `/admin/health`, which reports neither; the version now comes
+  from `/admin/status`, the uptime from `uptime_seconds`.
 
 ### Upgrading from 1.5.x
 

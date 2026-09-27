@@ -24,6 +24,7 @@ if (!$viewModel->isTridentConfigured()) {
 
 $stats = $viewModel->isEnabled() ? $viewModel->getStats() : null;
 $health = $viewModel->isEnabled() ? $viewModel->getTridentHealth() : null;
+$version = $viewModel->isEnabled() ? $viewModel->getTridentVersion() : null;
 $mode = $viewModel->isSoftPurgeEnabled() ? __('Soft Purge') : __('Hard Purge');
 $isHealthy = $health !== null && ($health['status'] ?? '') === 'ok';
 ?>
@@ -39,12 +40,19 @@ $isHealthy = $health !== null && ($health['status'] ?? '') === 'ok';
         <?php endif; ?>
     </h2>
 
-    <?php if ($health !== null && isset($health['version'])): ?>
+    <?php if ($version !== null): ?>
         <div class="trident-version-info">
-            <?= $escaper->escapeHtml(__('Trident v%1', $health['version'])) ?>
-            <?php if (isset($health['uptime'])): ?>
-                &mdash; <?= $escaper->escapeHtml(__('Uptime: %1', $health['uptime'])) ?>
+            <?= $escaper->escapeHtml(__('Trident v%1', $version)) ?>
+            <?php if (isset($health['uptime_seconds'])): ?>
+                &mdash; <?= $escaper->escapeHtml(__('Uptime: %1 s', (string) $health['uptime_seconds'])) ?>
             <?php endif; ?>
+        </div>
+    <?php endif; ?>
+
+    <?php $compat = $viewModel->compatibilityWarning($version); ?>
+    <?php if ($compat !== null): ?>
+        <div class="message message-warning trident-compat">
+            <span><?= $escaper->escapeHtml($compat) ?></span>
         </div>
     <?php endif; ?>
 
