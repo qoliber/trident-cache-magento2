@@ -598,6 +598,21 @@ class TridentClientTest extends TestCase
         $this->assertSame(['urls' => ['/a.html', '/b.html']], self::json($request['body']));
     }
 
+    public function testWarmingFromSitemapsIsOneEngineRunWithThemAndTheUrls(): void
+    {
+        $this->http->answer('edge-1', 202, '{"status":"started","queued":42,"source":"request"}');
+
+        $result = $this->client()->warmerRun(['https://shop.test/a.html'], ['https://shop.test/sitemap.xml.gz']);
+
+        $request = $this->only();
+        $this->assertSame('http://edge-1:9301/admin/warmer/run', $request['url']);
+        $this->assertSame(
+            ['sitemaps' => ['https://shop.test/sitemap.xml.gz'], 'urls' => ['https://shop.test/a.html']],
+            self::json($request['body'])
+        );
+        $this->assertSame(42, $result['queued']);
+    }
+
     public function testWarmingWithoutUrlsRunsTheConfiguredSources(): void
     {
         $this->http->answer('edge-1', 202, '{"status":"started","queued":10}');

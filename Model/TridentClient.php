@@ -489,14 +489,19 @@ class TridentClient
     }
 
     /**
-     * Warm the configured sources — or, given URLs, exactly those: the
-     * engine's run takes no body, so a URL list goes to the warmer's queue.
+     * Warm the configured sources; given sitemaps (`.xml` or `.xml.gz`, an
+     * index expands), warm those — and any URLs — in one engine run instead;
+     * given only URLs, queue exactly those.
      *
      * @param array<int, string> $urls
+     * @param array<int, string> $sitemaps absolute sitemap URLs (the caller scopes them to the store)
      * @return array<string, mixed>|null
      */
-    public function warmerRun(array $urls = []): ?array
+    public function warmerRun(array $urls = [], array $sitemaps = []): ?array
     {
+        if ($sitemaps !== []) {
+            return $this->read(fn (AdminClient $c) => $c->warmerRun($sitemaps, $urls), 'POST /admin/warmer/run');
+        }
         if ($urls !== []) {
             return $this->warmerQueue($urls);
         }

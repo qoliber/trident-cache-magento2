@@ -159,6 +159,19 @@ $viewModel = $block->getData('view_model');
                                           placeholder="<?= $escaper->escapeHtmlAttr(__("https://example.com/\nhttps://example.com/category.html")) ?>"></textarea>
                             </div>
                         </div>
+                        <div class="admin__field">
+                            <label class="admin__field-label" for="trident_warmer_sitemaps">
+                                <span><?= $escaper->escapeHtml(__('Sitemap URL(s) (optional)')) ?></span>
+                            </label>
+                            <div class="admin__field-control">
+                                <textarea id="trident_warmer_sitemaps"
+                                          name="sitemaps"
+                                          rows="3"
+                                          class="admin__control-textarea"
+                                          placeholder="<?= $escaper->escapeHtmlAttr(__("/sitemap.xml")) ?>"></textarea>
+                                <div class="admin__field-note"><?= $escaper->escapeHtml(__('One per line, on this installation\'s stores (.xml or .xml.gz; an index expands). Warms the sitemap\'s pages instead of the configured sources.')) ?></div>
+                            </div>
+                        </div>
                         <button type="submit" class="action-default scalable primary">
                             <span><?= $escaper->escapeHtml(__('Run Now')) ?></span>
                         </button>
