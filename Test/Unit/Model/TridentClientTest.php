@@ -613,6 +613,56 @@ class TridentClientTest extends TestCase
         $this->assertSame(42, $result['queued']);
     }
 
+    public function testSitemapRunPreservesNormalizedListsAndSelectedInstance(): void
+    {
+        $this->twoEdges();
+        $this->selected = 'edge-2';
+        $this->http->answer('edge-2', 202, '{"status":"started","queued":2,"source":"request"}');
+
+        $result = $this->client()->warmerRun(
+            [4 => ' https://shop.test/a.html ', 9 => ''],
+            [3 => ' https://shop.test/sitemap.xml.gz ', 7 => ' ']
+        );
+
+        $request = $this->only();
+        $this->assertSame('POST', $request['method']);
+        $this->assertSame('http://edge-2:9301/admin/warmer/run', $request['url']);
+        $this->assertSame('Bearer token-2', $request['headers']['Authorization']);
+        $this->assertSame('application/json', $request['headers']['Content-Type']);
+        $this->assertSame(
+            ['sitemaps' => ['https://shop.test/sitemap.xml.gz'], 'urls' => ['https://shop.test/a.html']],
+            self::json($request['body'])
+        );
+        $this->assertSame(['status' => 'started', 'queued' => 2, 'source' => 'request'], $result);
+    }
+
+    #[DataProvider('sitemapRunErrors')]
+    public function testSitemapRunReportsRefusedOrMalformedReply(int $status, string $body): void
+    {
+        $this->http->answer('edge-1', $status, $body);
+        $client = $this->client();
+
+        $this->assertNull($client->warmerRun([], ['https://shop.test/sitemap.xml']));
+        $this->assertNotNull($client->lastFailure());
+        $this->assertStringContainsString('POST /admin/warmer/run:', $client->lastFailure());
+        $this->assertSame(
+            ['sitemaps' => ['https://shop.test/sitemap.xml']],
+            self::json($this->only()['body'])
+        );
+    }
+
+    public static function sitemapRunErrors(): array
+    {
+        return [
+            'unauthorized' => [401, '{"error":"Unauthorized"}'],
+            'disabled' => [404, '{"error":"Warmer disabled"}'],
+            'cancelled' => [409, '{"error":"Run cancelled","code":"RUN_CANCELLED"}'],
+            'unavailable' => [503, '{"error":"Unavailable"}'],
+            'redirect' => [302, ''],
+            'malformed-success' => [202, '{'],
+        ];
+    }
+
     public function testWarmingWithoutUrlsRunsTheConfiguredSources(): void
     {
         $this->http->answer('edge-1', 202, '{"status":"started","queued":10}');

@@ -1,0 +1,209 @@
+--- a/Cache/Frontend/Adapter/SymfonyAdapters/FilesystemTagAdapter.php
++++ b/Cache/Frontend/Adapter/SymfonyAdapters/FilesystemTagAdapter.php
+@@ -25,6 +25,14 @@
+     private string $tagDirectory;
+ 
+     /**
++     * Stable lock shared by every frontend using this tag directory.
++     * Kept outside tags/* so clearing the indices cannot replace its inode.
++     *
++     * @var string
++     */
++    private string $indexLockFile;
++
++    /**
+      * @param CacheItemPoolInterface $cachePool
+      * @param string $tagDirectory Directory to store tag index files
+      */
+@@ -32,6 +40,7 @@
+     {
+         $this->cachePool = $cachePool;
+         $this->tagDirectory = rtrim($tagDirectory, '/') . '/tags/';
++        $this->indexLockFile = rtrim($tagDirectory, '/') . '/.tag-index.lock';
+ 
+         // Ensure tag directory exists with proper error handling
+         if (!is_dir($this->tagDirectory)) {
+@@ -44,6 +53,57 @@
+     }
+ 
+     /**
++     * Serialize complete index operations across all frontend cache pools.
++     *
++     * Private unlocked helpers keep nested queries under this one outer lock.
++     * No operation is retried or run unlocked if opening/acquiring the lock fails.
++     *
++     * @param int $mode LOCK_SH for queries, LOCK_EX for index changes
++     * @param callable $operation
++     * @return mixed
++     */
++    private function withIndexLock(int $mode, callable $operation): mixed
++    {
++        $lock = @fopen($this->indexLockFile, 'c+b');
++        if ($lock === false) {
++            throw new \RuntimeException('Failed to open filesystem tag index lock.');
++        }
++
++        $locked = false;
++        $failure = null;
++        try {
++            if (!@flock($lock, $mode)) {
++                throw new \RuntimeException('Failed to acquire filesystem tag index lock.');
++            }
++            $locked = true;
++            return $operation();
++        } catch (\Throwable $exception) {
++            $failure = $exception;
++            throw $exception;
++        } finally {
++            $releaseFailure = null;
++            try {
++                if ($locked && !@flock($lock, LOCK_UN)) {
++                    $releaseFailure = new \RuntimeException('Failed to release filesystem tag index lock.');
++                }
++            } catch (\Throwable $exception) {
++                $releaseFailure = $exception;
++            }
++            try {
++                if (!@fclose($lock) && $releaseFailure === null) {
++                    $releaseFailure = new \RuntimeException('Failed to close filesystem tag index lock.');
++                }
++            } catch (\Throwable $exception) {
++                $releaseFailure ??= $exception;
++            }
++            // Cleanup never replaces the exact exception from the native operation.
++            if ($failure === null && $releaseFailure !== null) {
++                throw $releaseFailure;
++            }
++        }
++    }
++
++    /**
+      * Get tag file path
+      *
+      * @param string $tag
+@@ -154,6 +214,21 @@
+             return [];
+         }
+ 
++        return $this->withIndexLock(LOCK_SH, fn (): array => $this->getIdsMatchingTagsUnlocked($tags));
++    }
++
++    /**
++     * Read the native indices while the shared index lock is held.
++     *
++     * @param array $tags
++     * @return array
++     */
++    private function getIdsMatchingTagsUnlocked(array $tags): array
++    {
++        if (empty($tags)) {
++            return [];
++        }
++
+         // Get IDs for first tag
+         $tag = array_shift($tags);
+         $ids = $this->getTagIds($tag);
+@@ -180,6 +255,21 @@
+             return [];
+         }
+ 
++        return $this->withIndexLock(LOCK_SH, fn (): array => $this->getIdsMatchingAnyTagsUnlocked($tags));
++    }
++
++    /**
++     * Read the native indices while the shared index lock is held.
++     *
++     * @param array $tags
++     * @return array
++     */
++    private function getIdsMatchingAnyTagsUnlocked(array $tags): array
++    {
++        if (empty($tags)) {
++            return [];
++        }
++
+         $ids = [];
+         foreach ($tags as $tag) {
+             // phpcs:ignore Magento2.Performance.ForeachArrayMerge
+@@ -196,6 +286,17 @@
+      */
+     public function getIdsNotMatchingTags(array $tags): array
+     {
++        return $this->withIndexLock(LOCK_SH, fn (): array => $this->getIdsNotMatchingTagsUnlocked($tags));
++    }
++
++    /**
++     * Read the native indices while the shared index lock is held.
++     *
++     * @param array $tags
++     * @return array
++     */
++    private function getIdsNotMatchingTagsUnlocked(array $tags): array
++    {
+         if (empty($tags)) {
+             // Return all IDs
+             return $this->getAllIds();
+@@ -205,7 +306,7 @@
+         $allIds = $this->getAllIds();
+ 
+         // Get IDs matching any tag
+-        $matchingIds = $this->getIdsMatchingAnyTags($tags);
++        $matchingIds = $this->getIdsMatchingAnyTagsUnlocked($tags);
+ 
+         // Return difference
+         return array_values(array_diff($allIds, $matchingIds));
+@@ -267,6 +368,20 @@
+             return;
+         }
+ 
++        $this->withIndexLock(LOCK_EX, function () use ($id, $tags): void {
++            $this->onSaveUnlocked($id, $tags);
++        });
++    }
++
++    /**
++     * Update the native indices while the shared index lock is held.
++     */
++    private function onSaveUnlocked(string $id, array $tags): void
++    {
++        if (empty($tags)) {
++            return;
++        }
++
+         // Add ID to each tag file
+         foreach ($tags as $tag) {
+             $this->addIdToTag($tag, $id);
+@@ -279,6 +394,16 @@
+      * Removes ID from all tag files
+      */
+     public function onRemove(string $id): void
++    {
++        $this->withIndexLock(LOCK_EX, function () use ($id): void {
++            $this->onRemoveUnlocked($id);
++        });
++    }
++
++    /**
++     * Update the native indices while the shared index lock is held.
++     */
++    private function onRemoveUnlocked(string $id): void
+     {
+         // We need to scan all tag files and remove this ID
+         $tagFiles = glob($this->tagDirectory . '*');
+@@ -300,6 +425,16 @@
+      */
+     public function clearAllIndices(): void
+     {
++        $this->withIndexLock(LOCK_EX, function (): void {
++            $this->clearAllIndicesUnlocked();
++        });
++    }
++
++    /**
++     * Update the native indices while the shared index lock is held.
++     */
++    private function clearAllIndicesUnlocked(): void
++    {
+         // Remove all tag files
+         $tagFiles = glob($this->tagDirectory . '*');
+ 

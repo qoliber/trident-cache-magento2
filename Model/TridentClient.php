@@ -500,7 +500,24 @@ class TridentClient
     public function warmerRun(array $urls = [], array $sitemaps = []): ?array
     {
         if ($sitemaps !== []) {
-            return $this->read(fn (AdminClient $c) => $c->warmerRun($sitemaps, $urls), 'POST /admin/warmer/run');
+            // The allowed SDK 1.8.1 has a no-argument warmerRun() and PHP
+            // silently ignores extra arguments. Its public Api already supports
+            // the request body; use the same authenticated/error-mapped path as
+            // cacheCoverage() so every allowed pairing preserves selected sources.
+            $sitemaps = array_values(array_filter(array_map('trim', $sitemaps), static fn (string $u): bool => $u !== ''));
+            $urls = array_values(array_filter(array_map('trim', $urls), static fn (string $u): bool => $u !== ''));
+            $body = [];
+            if ($sitemaps !== []) {
+                $body['sitemaps'] = $sitemaps;
+            }
+            if ($urls !== []) {
+                $body['urls'] = $urls;
+            }
+            return $this->read(
+                fn (AdminClient $c, Instance $target): array => (new Api($target, $this->transport, $this->logger))
+                    ->call('POST', '/admin/warmer/run', [], $body === [] ? null : $body)['data'],
+                'POST /admin/warmer/run'
+            );
         }
         if ($urls !== []) {
             return $this->warmerQueue($urls);
