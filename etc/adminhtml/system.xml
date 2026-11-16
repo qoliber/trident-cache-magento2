@@ -94,6 +94,14 @@
                             <field id="*/*/esi_enabled">1</field>
                         </depends>
                     </field>
+                    <field id="max_tags_per_response" type="text" translate="label comment" sortOrder="100" showInDefault="1">
+                        <label>Max Cache Tags per Response</label>
+                        <comment>Trident does not cache a response with more tags than its [cache.tags] max_tags_per_entry (200 by default). Above this number the module keeps the page's own tags, drops listed-product tags first, and adds an overflow tag that every tag purge also purges. Keep it equal to the Trident setting. 0 switches the cap off. Default: 200</comment>
+                        <validate>validate-digits</validate>
+                        <depends>
+                            <field id="*/*/caching_application">3</field>
+                        </depends>
+                    </field>
                     <depends>
                         <field id="caching_application">3</field>
                     </depends>

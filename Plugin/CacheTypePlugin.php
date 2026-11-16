@@ -14,6 +14,7 @@ namespace Qoliber\TridentCache\Plugin;
 
 use Magento\PageCache\Model\Cache\Type as PageCacheType;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
+use Qoliber\TridentCache\Model\TagBudget;
 use Qoliber\TridentCache\Model\TridentClient;
 use Zend_Cache;
 
@@ -58,7 +59,9 @@ class CacheTypePlugin
             $tags = array_values(array_diff($tags, [self::FPC_TAG]));
 
             if (!empty($tags)) {
-                $this->purgeAfterCommit->purgeTags($tags);
+                // With the overflow tags, for pages that dropped one of these
+                // tags to stay within Trident's per-entry limit (TagBudget).
+                $this->purgeAfterCommit->purgeTags(TagBudget::withOverflow($tags));
             }
         }
 

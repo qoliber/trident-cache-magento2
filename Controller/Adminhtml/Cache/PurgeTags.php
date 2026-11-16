@@ -17,6 +17,7 @@ use Magento\Backend\App\Action\Context;
 use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Redirect;
 use Psr\Log\LoggerInterface;
+use Qoliber\TridentCache\Model\TagBudget;
 use Qoliber\TridentCache\Model\TridentClient;
 
 class PurgeTags extends Action implements HttpPostActionInterface
@@ -49,7 +50,9 @@ class PurgeTags extends Action implements HttpPostActionInterface
         }
 
         try {
-            $result = $this->tridentClient->purgeTags($tagsArray);
+            // With the overflow tags: a page that dropped one of these tags
+            // to stay within Trident's per-entry limit is reached through them.
+            $result = $this->tridentClient->purgeTags(TagBudget::withOverflow($tagsArray));
 
             if ($result) {
                 $done = $this->tridentClient->describePurge($result);

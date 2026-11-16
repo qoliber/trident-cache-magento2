@@ -33,6 +33,7 @@ class Config
     public const XML_TRIDENT_ESI_ENABLED = 'system/full_page_cache/trident/esi_enabled';
     public const XML_TRIDENT_ESI_MAX_DEPTH = 'system/full_page_cache/trident/esi_max_depth';
     public const XML_TRIDENT_INSTANCES = 'system/full_page_cache/trident/instances';
+    public const XML_TRIDENT_MAX_TAGS = 'system/full_page_cache/trident/max_tags_per_response';
 
     /** The name of the single instance configured in the admin. */
     public const DEFAULT_INSTANCE = Instances::DEFAULT_NAME;
@@ -206,5 +207,23 @@ class Config
     public function getEsiMaxDepth(): int
     {
         return (int) ($this->scopeConfig->getValue(self::XML_TRIDENT_ESI_MAX_DEPTH) ?: 3);
+    }
+
+    /**
+     * The most tags one response may carry in `X-Magento-Tags`
+     * ({@see TagBudget}). Keep it equal to Trident's
+     * `[cache.tags] max_tags_per_entry`: a response with more tags than that
+     * is not cached.
+     *
+     * @return int 200 when unset or not a number; 0 switches the cap off.
+     */
+    public function getMaxTagsPerResponse(): int
+    {
+        $value = $this->scopeConfig->getValue(self::XML_TRIDENT_MAX_TAGS);
+        if ($value === null || $value === '' || !is_numeric($value)) {
+            return TagBudget::DEFAULT_MAX_TAGS;
+        }
+
+        return max(0, (int) $value);
     }
 }

@@ -18,6 +18,7 @@ use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\Controller\Result\Json;
 use Magento\Framework\Controller\Result\JsonFactory;
 use Psr\Log\LoggerInterface;
+use Qoliber\TridentCache\Model\TagBudget;
 use Qoliber\TridentCache\Model\TridentClient;
 
 class PurgeTag extends Action implements HttpPostActionInterface
@@ -47,7 +48,9 @@ class PurgeTag extends Action implements HttpPostActionInterface
                 return $resultJson->setData(['success' => false, 'message' => 'Tag is required']);
             }
 
-            $result = $this->tridentClient->purgeTags([$tag]);
+            // With the overflow tag: a page that dropped this tag to stay
+            // within Trident's per-entry limit is reached through it.
+            $result = $this->tridentClient->purgeTags(TagBudget::withOverflow([(string) $tag]));
 
             if ($result !== null) {
                 return $resultJson->setData([

@@ -20,6 +20,7 @@ use Magento\Framework\Event\ObserverInterface;
 use Qoliber\TridentCache\Model\Config;
 use Qoliber\TridentCache\Model\PurgeAfterCommit;
 use Qoliber\TridentCache\Model\PurgeStrategy;
+use Qoliber\TridentCache\Model\TagBudget;
 
 /**
  * The event fires from AbstractModel::afterSave(), inside the save
@@ -50,7 +51,14 @@ class FlushCacheByTagsObserver implements ObserverInterface
         $tags = $this->tagResolver->getTags($object);
         if (!empty($tags)) {
             $tags = $this->purgeStrategy->filterTags($object, $tags);
-            $this->purgeAfterCommit->purgeTags(array_unique(array_map('strtolower', $tags)));
+            // As resolved, never lowercased: Trident matches tags
+            // case-sensitively and stores them exactly as X-Magento-Tags
+            // carries them (ResponsePlugin passes that header through
+            // untouched). A lowercased `FPC` or `CAT_P_42` purges nothing.
+            // With the overflow tags: a page that carried more tags than
+            // Trident stores dropped some of them (see TagBudget) and is
+            // reached through its overflow tag instead.
+            $this->purgeAfterCommit->purgeTags(TagBudget::withOverflow(array_values(array_unique($tags))));
         }
 
         // A config value's own identities are held until the configuration is
@@ -58,7 +66,7 @@ class FlushCacheByTagsObserver implements ObserverInterface
         $identities = $this->configValueIdentities($object);
         if (!empty($identities)) {
             $this->purgeAfterCommit->purgeConfigTags(
-                array_unique(array_map('strtolower', $identities))
+                TagBudget::withOverflow(array_values(array_unique($identities)))
             );
         }
     }

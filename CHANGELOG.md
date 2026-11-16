@@ -13,6 +13,18 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 <!-- At the engine release the pipeline tags this repository v1.8.0 (lockstep,
      docs/release/PACKAGE-VERSIONING.md in the Trident repository). -->
 
+- New: **Max Cache Tags per Response** (Stores → Configuration → Advanced →
+  System → Full Page Cache → Trident Configuration; default 200, `0` switches
+  it off). Trident does not cache a response with more tags than its
+  `[cache.tags] max_tags_per_entry`, which a listing page with many products
+  exceeds. Over the limit the module keeps the page's own tags first, then as
+  many `cat_p_<id>` tags as fit, and replaces the rest with an overflow tag
+  (`trident_overflow_cat_p` or `trident_overflow`). Every purge by tag the
+  module sends also names the matching overflow tag. Purges sent from your own
+  scripts have to add it themselves; see "Cache tag limit" in the README.
+- Fix: tags are sent to Trident as Magento wrote them. They used to be
+  lower-cased, and Trident matches tags case-sensitively, so a purge of a tag
+  with an upper-case letter matched nothing.
 - Versioning follows Trident (lockstep): module 1.8.x works with Trident 1.8.
   The Cache Management status and the instance overview warn when a connected
   Trident runs another release line than the module is built for.
@@ -22,6 +34,20 @@ with (e.g. module 1.4.0 ↔ Trident 1.4.0).
 - Fix: the Cache Management status block showed no Trident version or uptime —
   it read them from `/admin/health`, which reports neither; the version now comes
   from `/admin/status`, the uptime from `uptime_seconds`.
+- Fix: a page with more cache tags than Trident stores per entry
+  (`[cache.tags] max_tags_per_entry`, 200 by default) was not cached at all —
+  Trident answered `X-Cache: PASS`, "cache tag count limit", on every request,
+  typically for a category or search page listing many products. The module
+  now bounds `X-Magento-Tags` to **Stores → Configuration → Advanced → System →
+  Full Page Cache → Trident Configuration → Max Cache Tags per Response**
+  (default 200; keep it equal to the Trident setting; 0 switches the cap off).
+  Over the limit it keeps the tags that are not listed products, then as many
+  `cat_p_<id>` tags as fit, and adds `trident_overflow_cat_p` (a product tag was
+  dropped) or `trident_overflow` (another tag was) in their place. Every purge
+  by tag now also names the matching overflow tag, so a page that dropped a tag
+  is purged by any change of that kind instead of by none. A header within the
+  limit is passed through byte for byte, as before. See the README, "Cache tag
+  limit".
 
 ### Upgrading from 1.5.x
 

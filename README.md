@@ -30,6 +30,37 @@ bin/magento setup:upgrade
 
 Configuration, upgrade notes and the changelog: see `CHANGELOG.md`.
 
+## Cache tag limit
+
+Trident does not cache a response that carries more tags than its
+`[cache.tags] max_tags_per_entry` (200 by default): the page is answered
+`X-Cache: PASS` with the reason "cache tag count limit" on every request. A
+category or search page listing many products gets there, because
+`X-Magento-Tags` carries one `cat_p_<id>` per listed product.
+
+The module therefore bounds the header to **Max Cache Tags per Response**
+(Stores → Configuration → Advanced → System → Full Page Cache → Trident
+Configuration; default 200). A response within the limit is not touched. Over
+the limit:
+
+- the tags that are not listed products are kept first (the page's own entity,
+  its category, CMS blocks), then as many `cat_p_<id>` tags as fit, in the
+  order Magento emitted them;
+- the dropped tags are replaced by an overflow tag: `trident_overflow_cat_p`
+  when a `cat_p_<id>` tag was dropped, `trident_overflow` when any other tag
+  was;
+- every purge by tag the module sends also names the overflow tag of the tags
+  it carries. A listing that dropped `cat_p_42` is purged when **any** product
+  changes — more often than strictly needed, but never missed.
+
+Keep the setting equal to Trident's `max_tags_per_entry`; if you raise one,
+raise the other. `0` switches the cap off (the header is passed through
+whatever its size, as before 1.8). Purges sent from outside the module — your
+own scripts calling Trident's purge API with a Magento tag — do not know about
+the overflow tags: add `trident_overflow_cat_p` to a purge of `cat_p_<id>`
+tags, and `trident_overflow` to a purge of any other tag. A purge by tag
+pattern cannot match a dropped tag either.
+
 ## Versioning
 
 Versions follow Trident: this module 1.8.x works with Trident 1.8. MAJOR.MINOR moves

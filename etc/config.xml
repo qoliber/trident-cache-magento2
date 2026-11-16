@@ -23,6 +23,7 @@
                     <ttl_static>2592000</ttl_static>
                     <esi_enabled>0</esi_enabled>
                     <esi_max_depth>3</esi_max_depth>
+                    <max_tags_per_response>200</max_tags_per_response>
                 </trident>
             </full_page_cache>
         </system>
