@@ -61,6 +61,16 @@ the overflow tags: add `trident_overflow_cat_p` to a purge of `cat_p_<id>`
 tags, and `trident_overflow` to a purge of any other tag. A purge by tag
 pattern cannot match a dropped tag either.
 
+## Restarts and several nodes
+
+Every Trident restart starts with an empty cache (an upgrade, a rollback, a
+crash or a plain restart: Trident 1.8 exports its cache but does not restore
+it). Restart one Trident node at a time and size the origin for one cold
+node's share of the traffic, or refill the busiest pages with the warmer
+before the node takes traffic. Purges are per node: list every Trident
+instance in `app/etc/env.php`, so the outbox delivers each purge to each
+node.
+
 ## Versioning
 
 Versions follow Trident: this module 1.8.x works with Trident 1.8. MAJOR.MINOR moves
